@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted, watch, computed } from "vue";
+import { ref, reactive, onMounted, onUnmounted, watch, computed } from "vue";
 import Sortable from "sortablejs";
 import AddArea from "./components/AddArea.vue";
 import AreaCard from "./components/AreaCard.vue";
@@ -48,6 +48,8 @@ const DEFAULT_SETTINGS = {
     red: { label: "No", hot: TEMP_THRESHOLDS.red.hot, cold: TEMP_THRESHOLDS.red.cold },
   },
   maxWindows: 3,
+  // Auto-refresh interval in minutes; 0 = off (refresh only on load / ↻ button).
+  refreshMinutes: 30,
 };
 
 function numOr(v, dflt) {
@@ -81,10 +83,12 @@ function loadSettings() {
     if (v && typeof v === "object") {
       const lb = parseInt(v.lookbackDays, 10);
       const mw = parseInt(v.maxWindows, 10);
+      const rf = parseInt(v.refreshMinutes, 10);
       return {
         lookbackDays: lb >= 3 && lb <= 7 ? lb : DEFAULT_SETTINGS.lookbackDays,
         temp: mergeTemp(v.temp),
         maxWindows: mw >= 1 && mw <= 10 ? mw : DEFAULT_SETTINGS.maxWindows,
+        refreshMinutes: rf >= 0 && rf <= 1440 ? rf : DEFAULT_SETTINGS.refreshMinutes,
       };
     }
   } catch {
@@ -107,6 +111,7 @@ function resetSettings() {
   const d = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
   settings.lookbackDays = d.lookbackDays;
   settings.maxWindows = d.maxWindows;
+  settings.refreshMinutes = d.refreshMinutes;
   for (const k of ["green", "yellow", "orange", "red"]) Object.assign(settings.temp[k], d.temp[k]);
 }
 
@@ -152,6 +157,22 @@ watch(
 // maxWindows only affects display (the cards' summary computed reads it as a
 // prop), so just persist — no refetch/recompute needed.
 watch(() => settings.maxWindows, persistSettings);
+
+// Auto-refresh: re-fetch every area on a timer. 0 = off. Restart the timer
+// whenever the interval changes so a new value takes effect immediately.
+let autoRefreshTimer = null;
+function restartAutoRefresh() {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  const mins = settings.refreshMinutes;
+  if (mins > 0) autoRefreshTimer = setInterval(refreshAll, mins * 60 * 1000);
+}
+watch(() => settings.refreshMinutes, () => {
+  persistSettings();
+  restartAutoRefresh();
+});
 
 // Drag-to-reorder the cards (via the grip handle), persisting the new order.
 let sortable = null;
@@ -343,6 +364,11 @@ onMounted(() => {
   }
   areas.value = saved;
   refreshAll();
+  restartAutoRefresh();
+});
+
+onUnmounted(() => {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
 });
 </script>
 

@@ -39,6 +39,21 @@ function normalizeTemp() {
         </div>
       </section>
 
+      <!-- Auto-refresh -->
+      <section class="group">
+        <h3>Auto-refresh</h3>
+        <p class="hint">How often to re-fetch weather for every area while the app is open.</p>
+        <div class="row">
+          <select v-model.number="settings.refreshMinutes">
+            <option :value="0">Off</option>
+            <option :value="10">Every 10 minutes</option>
+            <option :value="15">Every 15 minutes</option>
+            <option :value="30">Every 30 minutes</option>
+            <option :value="60">Every hour</option>
+          </select>
+        </div>
+      </section>
+
       <!-- Ride windows to show -->
       <section class="group">
         <h3>Ride windows to show</h3>
@@ -106,6 +121,10 @@ function normalizeTemp() {
 
 .row { display: flex; align-items: center; gap: 10px; }
 .row input[type="range"] { width: 180px; accent-color: var(--accent); cursor: pointer; }
+.row select {
+  padding: 6px 8px; font-size: 13px; cursor: pointer;
+  background: var(--card-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+}
 .val { color: var(--text); font-variant-numeric: tabular-nums; font-size: 13px; }
 
 .grid {
