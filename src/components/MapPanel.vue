@@ -18,14 +18,16 @@ const COLOR = {
   none: "#5cc8ff",
 };
 
-// Every layer (CARTO, Esri imagery/labels, RainViewer radar) has real tiles
-// through z12. To avoid "zoom level not supported", we never REQUEST a tile past
-// z12 — Leaflet upscales for higher zoom (maxNativeZoom) — while still letting
-// the user zoom in to z16 to see the dots. A transparent fallback hides any
-// stray failed tile.
+// We let the user zoom to z14 but never REQUEST a tile past each layer's real
+// coverage — Leaflet upscales beyond maxNativeZoom. The base maps (CARTO, Esri)
+// have tiles well past z12. RainViewer radar, however, only serves real tiles
+// through z7: beyond that it returns a "Zoom Level Not Supported" placeholder
+// PNG (a real 200, so errorTileUrl can't catch it), which Leaflet would then
+// upscale across the whole map. Capping radar at its native max avoids that.
 const MAP_MIN_ZOOM = 3;
 const MAP_MAX_ZOOM = 14; // how far the user can zoom (tiles upscale past native)
-const MAP_NATIVE_MAX = 12; // never request tiles beyond this — all layers OK here
+const MAP_NATIVE_MAX = 12; // base layers: never request tiles beyond this
+const RADAR_NATIVE_MAX = 7; // RainViewer's real max — z8+ is "not supported"
 const BLANK_TILE =
   "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
@@ -126,7 +128,7 @@ async function loadRadar() {
     }
     radarLayer = L.tileLayer(url, {
       opacity: 0.65,
-      maxNativeZoom: MAP_NATIVE_MAX,
+      maxNativeZoom: RADAR_NATIVE_MAX, // upscale past z7 instead of fetching the placeholder
       maxZoom: MAP_MAX_ZOOM,
       errorTileUrl: BLANK_TILE,
     });
