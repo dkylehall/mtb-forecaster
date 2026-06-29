@@ -1,7 +1,7 @@
 {
-  "name": "trail-conditions",
+  "name": "mtb-forecaster",
   "version": "0.1.0",
-  "description": "Mountain-bike trail-condition board: estimates when trails are dry enough to ride based on past and forecast rainfall.",
+  "description": "Mountain-bike trail forecaster: tells you when your riding areas are dry enough AND warm enough to ride, from past + forecast weather.",
   "private": true,
   "type": "module",
   "scripts": {
