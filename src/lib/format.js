@@ -33,8 +33,7 @@ export function humanize(h) {
   return `~${d} day${d === 1 ? "" : "s"}`;
 }
 
-export function durationLabel(hours, openEnded) {
-  if (openEnded) return "days";
+export function durationLabel(hours) {
   return humanize(hours).replace(/^~/, "");
 }
 

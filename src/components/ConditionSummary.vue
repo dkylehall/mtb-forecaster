@@ -34,14 +34,16 @@ function wetLine() {
   const w = props.summary.wet;
   if (!w || w.nowKey == null) return null;
   if (w.alreadyRideable) {
+    if (w.openEnded) return "Dry now — good to ride, no rain in the forecast";
     if (w.greenForHours != null) {
-      return `Dry now — rideable for ${durationLabel(w.greenForHours, w.openEnded)} before rain returns`;
+      return `Dry now — rideable for ${durationLabel(w.greenForHours)} before rain returns`;
     }
     return "Dry now — good to ride";
   }
   const becomes = `rideable in ${humanize(w.rideableInHours)}`;
   if (w.greenForHours != null) {
-    return `${DRY_NOW[w.nowKey]} — ${becomes}, then good for ${durationLabel(w.greenForHours, w.openEnded)}`;
+    if (w.openEnded) return `${DRY_NOW[w.nowKey]} — ${becomes}, then no more rain in the forecast`;
+    return `${DRY_NOW[w.nowKey]} — ${becomes}, then good for ${durationLabel(w.greenForHours)}`;
   }
   return `${DRY_NOW[w.nowKey]} — ${becomes}`;
 }
