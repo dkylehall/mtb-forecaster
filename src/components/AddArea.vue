@@ -73,11 +73,20 @@ function pick(r) {
 </template>
 
 <style scoped>
-.add-area { position: relative; width: min(360px, 100%); }
-.add-area input { width: 100%; }
+.add-area { position: relative; width: min(560px, 100%); }
+.add-area input {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 16px;
+  border-radius: 12px;
+  border: 1.5px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.add-area input::placeholder { color: var(--muted); }
+.add-area input:focus { border-color: var(--accent); }
 .results {
   position: absolute;
-  top: 44px; left: 0; right: 0;
+  top: 56px; left: 0; right: 0;
   background: var(--card-2);
   border: 1px solid var(--line);
   border-radius: 10px;

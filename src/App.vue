@@ -1,10 +1,11 @@
 <script setup>
-import { ref, reactive, onMounted, watch, computed, nextTick } from "vue";
+import { ref, reactive, onMounted, watch, computed } from "vue";
 import Sortable from "sortablejs";
 import AddArea from "./components/AddArea.vue";
 import AreaCard from "./components/AreaCard.vue";
 import MapPanel from "./components/MapPanel.vue";
 import SettingsModal from "./components/SettingsModal.vue";
+import AreaDetailModal from "./components/AreaDetailModal.vue";
 import { fetchTrailWeather } from "./lib/weather.js";
 import { computeConditions, DEFAULT_DRY_CUTOFFS } from "./lib/drying.js";
 import { DEFAULT_IDEAL, TEMP_THRESHOLDS } from "./lib/temperature.js";
@@ -19,68 +20,73 @@ import {
 
 const IDEAL_KEY = "trail_ideal_temp_v1";
 const SETTINGS_KEY = "mtb_settings_v1";
-const COLLAPSED_KEY = "mtb_collapsed_v1";
 
 const areas = ref([]);
 // id -> { result, error, loading }
 const conditions = reactive({});
-const selectedId = ref(null);
-
-// Per-area collapsed state (id -> bool), persisted.
-const collapsed = reactive(loadCollapsed());
-function loadCollapsed() {
-  try {
-    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY));
-    return v && typeof v === "object" ? v : {};
-  } catch {
-    return {};
-  }
-}
-function persistCollapsed() {
-  try {
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
-  } catch {
-    /* ignore */
-  }
-}
-function toggleCollapse(id) {
-  collapsed[id] = !collapsed[id];
-  persistCollapsed();
-}
-function collapseAll() {
-  areas.value.forEach((a) => (collapsed[a.id] = true));
-  persistCollapsed();
-}
-function expandAll() {
-  areas.value.forEach((a) => (collapsed[a.id] = false));
-  persistCollapsed();
-}
 const mapCenter = ref({ lat: 38.2, lon: -78.7 }); // search bias, follows the map
 const boardEl = ref(null);
 const showSettings = ref(false);
+
+// Which area's detail modal is open (id, or null).
+const detailId = ref(null);
+const detailArea = computed(() => areas.value.find((a) => a.id === detailId.value) || null);
+function openDetail(id) {
+  detailId.value = id;
+}
 
 // Adjustable scoring settings (edited in the Settings modal). Defaults come from
 // the engine constants so they stay in sync.
 const DEFAULT_SETTINGS = {
   lookbackDays: 3,
+  // Riding (temperature) tiers: editable labels; yellow/orange/red carry a
+  // hot/cold degrees-outside-band value (green = the ideal band itself).
   temp: {
-    fairHot: TEMP_THRESHOLDS.yellow.hot,
-    fairCold: TEMP_THRESHOLDS.yellow.cold,
-    marginalHot: TEMP_THRESHOLDS.orange.hot,
-    marginalCold: TEMP_THRESHOLDS.orange.cold,
+    green: { label: "Ideal" },
+    yellow: { label: "Tolerable", hot: TEMP_THRESHOLDS.yellow.hot, cold: TEMP_THRESHOLDS.yellow.cold },
+    orange: { label: "Uncomfortable", hot: TEMP_THRESHOLDS.orange.hot, cold: TEMP_THRESHOLDS.orange.cold },
+    red: { label: "No", hot: TEMP_THRESHOLDS.red.hot, cold: TEMP_THRESHOLDS.red.cold },
   },
   dry: { drying: DEFAULT_DRY_CUTOFFS.drying, wet: DEFAULT_DRY_CUTOFFS.wet },
+  maxWindows: 3,
 };
+
+function numOr(v, dflt) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : dflt;
+}
+function mergeTemp(vt) {
+  const d = DEFAULT_SETTINGS.temp;
+  if (!vt || !vt.yellow) return JSON.parse(JSON.stringify(d)); // absent/old shape → defaults
+  const tier = (k, withVals) => {
+    const dv = d[k];
+    const sv = vt[k] || {};
+    const o = { label: typeof sv.label === "string" && sv.label ? sv.label : dv.label };
+    if (withVals) {
+      o.hot = numOr(sv.hot, dv.hot);
+      o.cold = numOr(sv.cold, dv.cold);
+    }
+    return o;
+  };
+  return {
+    green: tier("green", false),
+    yellow: tier("yellow", true),
+    orange: tier("orange", true),
+    red: tier("red", true),
+  };
+}
 
 function loadSettings() {
   try {
     const v = JSON.parse(localStorage.getItem(SETTINGS_KEY));
     if (v && typeof v === "object") {
       const lb = parseInt(v.lookbackDays, 10);
+      const mw = parseInt(v.maxWindows, 10);
       return {
         lookbackDays: lb >= 3 && lb <= 7 ? lb : DEFAULT_SETTINGS.lookbackDays,
-        temp: { ...DEFAULT_SETTINGS.temp, ...(v.temp || {}) },
+        temp: mergeTemp(v.temp),
         dry: { ...DEFAULT_SETTINGS.dry, ...(v.dry || {}) },
+        maxWindows: mw >= 1 && mw <= 10 ? mw : DEFAULT_SETTINGS.maxWindows,
       };
     }
   } catch {
@@ -102,28 +108,37 @@ function persistSettings() {
 function resetSettings() {
   const d = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
   settings.lookbackDays = d.lookbackDays;
-  Object.assign(settings.temp, d.temp);
+  settings.maxWindows = d.maxWindows;
+  for (const k of ["green", "yellow", "orange", "red"]) Object.assign(settings.temp[k], d.temp[k]);
   Object.assign(settings.dry, d.dry);
 }
 
 // Map settings → engine threshold shapes.
 function tempThresholds() {
   return {
-    yellow: { hot: settings.temp.fairHot, cold: settings.temp.fairCold },
-    orange: { hot: settings.temp.marginalHot, cold: settings.temp.marginalCold },
+    yellow: { hot: settings.temp.yellow.hot, cold: settings.temp.yellow.cold },
+    orange: { hot: settings.temp.orange.hot, cold: settings.temp.orange.cold },
   };
 }
 function dryCutoffs() {
   return { drying: settings.dry.drying, wet: settings.dry.wet };
 }
 
+// Lowercased tier labels for the detail modal's sentence text.
+const tempLabels = computed(() => ({
+  green: settings.temp.green.label.toLowerCase(),
+  yellow: settings.temp.yellow.label.toLowerCase(),
+  orange: settings.temp.orange.label.toLowerCase(),
+  red: settings.temp.red.label.toLowerCase(),
+}));
+
 // Legend rows, derived reactively from the current settings.
 const degLabel = (hot, cold) => (hot === cold ? `±${hot}°` : `+${hot}°/−${cold}°`);
 const ridingKey = computed(() => [
-  { color: "var(--green)", label: "Ideal", note: "" },
-  { color: "var(--yellow)", label: "Fair", note: degLabel(settings.temp.fairHot, settings.temp.fairCold) },
-  { color: "var(--orange)", label: "Marginal", note: degLabel(settings.temp.marginalHot, settings.temp.marginalCold) },
-  { color: "var(--red)", label: "No", note: `beyond ${degLabel(settings.temp.marginalHot, settings.temp.marginalCold)}` },
+  { color: "var(--green)", label: settings.temp.green.label, note: "" },
+  { color: "var(--yellow)", label: settings.temp.yellow.label, note: degLabel(settings.temp.yellow.hot, settings.temp.yellow.cold) },
+  { color: "var(--orange)", label: settings.temp.orange.label, note: degLabel(settings.temp.orange.hot, settings.temp.orange.cold) },
+  { color: "var(--red)", label: settings.temp.red.label, note: degLabel(settings.temp.red.hot, settings.temp.red.cold) },
 ]);
 const trailKey = computed(() => [
   { color: "var(--green)", label: "Dry", note: "rideable" },
@@ -145,6 +160,9 @@ watch(
   },
   { deep: true }
 );
+// maxWindows only affects display (the cards' summary computed reads it as a
+// prop), so just persist — no refetch/recompute needed.
+watch(() => settings.maxWindows, persistSettings);
 
 // Drag-to-reorder the cards (via the grip handle), persisting the new order.
 let sortable = null;
@@ -308,38 +326,24 @@ function refreshAll() {
 }
 
 function onAdd(place) {
-  // Already have this spot? Select it rather than silently doing nothing.
+  // Already have this spot? Open its detail rather than silently doing nothing.
   const existing = findExisting(areas.value, place);
   if (existing) {
-    selectedId.value = existing.id;
+    openDetail(existing.id);
     return;
   }
   const next = addArea(areas.value, place);
   areas.value = next;
   persist();
-  const added = next[next.length - 1];
-  selectedId.value = added.id;
-  refreshArea(added);
+  refreshArea(next[next.length - 1]);
 }
 
 function onRemove(id) {
   clearRetry(id);
+  if (detailId.value === id) detailId.value = null;
   areas.value = removeArea(areas.value, id);
   delete conditions[id];
   persist();
-}
-
-// Clicking a map dot: highlight, expand, and scroll its card into view.
-function onMarkerSelect(id) {
-  selectedId.value = id;
-  if (collapsed[id]) {
-    collapsed[id] = false;
-    persistCollapsed();
-  }
-  nextTick(() => {
-    const elc = document.querySelector(`[data-card="${id}"]`);
-    if (elc) elc.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  });
 }
 
 onMounted(() => {
@@ -415,8 +419,6 @@ onMounted(() => {
     <div class="layout">
       <main class="left">
         <div v-if="areas.length" class="board-tools">
-          <button @click="expandAll">Expand all</button>
-          <button @click="collapseAll">Collapse all</button>
           <label class="sort">
             Sort
             <select v-model="sortBy">
@@ -430,16 +432,12 @@ onMounted(() => {
           <AreaCard
             v-for="area in displayedAreas"
             :key="area.id"
-            :data-card="area.id"
             :area="area"
             :result="conditions[area.id] ? conditions[area.id].result : null"
             :current="conditions[area.id] && conditions[area.id].wx ? conditions[area.id].wx.current : null"
             :error="conditions[area.id] ? conditions[area.id].error : ''"
-            :selected="area.id === selectedId"
-            :collapsed="!!collapsed[area.id]"
             @remove="onRemove"
-            @select="selectedId = $event"
-            @toggle="toggleCollapse"
+            @open="openDetail"
           />
         </div>
         <p v-else class="empty">
@@ -451,7 +449,7 @@ onMounted(() => {
         <MapPanel
           :areas="areas"
           :conditions="conditions"
-          @select="onMarkerSelect"
+          @select="openDetail"
           @centerchange="mapCenter = $event"
         />
       </aside>
@@ -468,6 +466,17 @@ onMounted(() => {
       :settings="settings"
       @reset="resetSettings"
       @close="showSettings = false"
+    />
+
+    <AreaDetailModal
+      v-if="detailArea"
+      :area="detailArea"
+      :result="conditions[detailArea.id] ? conditions[detailArea.id].result : null"
+      :current="conditions[detailArea.id] && conditions[detailArea.id].wx ? conditions[detailArea.id].wx.current : null"
+      :error="conditions[detailArea.id] ? conditions[detailArea.id].error : ''"
+      :max-windows="settings.maxWindows"
+      :temp-labels="tempLabels"
+      @close="detailId = null"
     />
   </div>
 </template>

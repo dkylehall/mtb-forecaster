@@ -18,10 +18,16 @@ const COLOR = {
   none: "#5cc8ff",
 };
 
-// Cap zoom so every layer (incl. RainViewer radar, native max 12) has tiles —
-// avoids "zoom level not supported". We only need region-level detail anyway.
+// Every layer (CARTO, Esri imagery/labels, RainViewer radar) has real tiles
+// through z12. To avoid "zoom level not supported", we never REQUEST a tile past
+// z12 — Leaflet upscales for higher zoom (maxNativeZoom) — while still letting
+// the user zoom in to z16 to see the dots. A transparent fallback hides any
+// stray failed tile.
 const MAP_MIN_ZOOM = 3;
-const MAP_MAX_ZOOM = 12;
+const MAP_MAX_ZOOM = 14; // how far the user can zoom (tiles upscale past native)
+const MAP_NATIVE_MAX = 12; // never request tiles beyond this — all layers OK here
+const BLANK_TILE =
+  "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
 const el = ref(null);
 const baseMode = ref(localStorage.getItem("trail_map_base") || "streets");
@@ -35,14 +41,19 @@ let radarTimer = null;
 
 // Light, labeled base maps make trailheads easy to spot; satellite shows the
 // actual terrain/clearings.
+const TILE_OPTS = {
+  maxZoom: MAP_MAX_ZOOM,
+  maxNativeZoom: MAP_NATIVE_MAX,
+  errorTileUrl: BLANK_TILE,
+};
 const BASES = {
   streets: {
     url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    opts: { subdomains: "abcd", maxZoom: MAP_MAX_ZOOM, attribution: "© OpenStreetMap, © CARTO" },
+    opts: { ...TILE_OPTS, subdomains: "abcd", attribution: "© OpenStreetMap, © CARTO" },
   },
   satellite: {
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    opts: { maxZoom: MAP_MAX_ZOOM, attribution: "© Esri, Maxar, Earthstar Geographics" },
+    opts: { ...TILE_OPTS, attribution: "© Esri, Maxar, Earthstar Geographics" },
     labels:
       "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
   },
@@ -65,7 +76,7 @@ function setBase(mode) {
   baseLayer = L.tileLayer(b.url, b.opts).addTo(map);
   baseLayer.bringToBack();
   if (b.labels) {
-    labelLayer = L.tileLayer(b.labels, { maxZoom: b.opts.maxZoom }).addTo(map);
+    labelLayer = L.tileLayer(b.labels, { ...TILE_OPTS }).addTo(map);
   }
 }
 
@@ -113,7 +124,12 @@ async function loadRadar() {
       map.removeLayer(radarLayer);
       radarLayer = null;
     }
-    radarLayer = L.tileLayer(url, { opacity: 0.65, maxNativeZoom: 12, maxZoom: MAP_MAX_ZOOM });
+    radarLayer = L.tileLayer(url, {
+      opacity: 0.65,
+      maxNativeZoom: MAP_NATIVE_MAX,
+      maxZoom: MAP_MAX_ZOOM,
+      errorTileUrl: BLANK_TILE,
+    });
     if (radarOn.value) radarLayer.addTo(map);
   } catch {
     /* offline / blocked — just skip radar */
@@ -137,10 +153,13 @@ function toggleRadar() {
 
 onMounted(() => {
   map = L.map(el.value, {
-    zoomControl: true,
+    zoomControl: true, // the +/- buttons
     attributionControl: true,
     minZoom: MAP_MIN_ZOOM,
     maxZoom: MAP_MAX_ZOOM,
+    scrollWheelZoom: false, // don't zoom while scrolling the page
+    doubleClickZoom: false, // only the +/- buttons zoom
+    boxZoom: false,
   }).setView([38.2, -78.7], 7);
   setBase(baseMode.value);
   markerLayer = L.layerGroup().addTo(map);

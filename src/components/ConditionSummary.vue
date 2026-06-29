@@ -7,34 +7,27 @@ const props = defineProps({
   summary: { type: Object, required: true },
   result: { type: Object, required: true },
   show: { type: Array, default: () => ["wet", "temp", "next"] },
+  // Riding (temperature) tier labels — editable in settings.
+  tempLabels: {
+    type: Object,
+    default: () => ({ green: "ideal", yellow: "tolerable", orange: "uncomfortable", red: "no" }),
+  },
 });
 
 const DRY_NOW = { green: "Dry", yellow: "Drying", orange: "Very wet", red: "Soaked" };
-const TEMP_NOW = {
-  green: "comfortable",
-  yellow: "a bit off",
-  orange: "uncomfortable",
-  red: "harsh",
-};
-const TIER_LABEL = { green: "ideal", yellow: "fair", orange: "marginal", red: "poor" };
 
 function tempLine() {
   const t = props.summary.temp;
   if (!t || t.nowKey == null) return null;
+  const L = props.tempLabels;
   const here = `${t.nowTemp}°F`;
-  if (t.nowKey === "green") {
-    if (t.change) {
-      const verb = t.change.dir === "up" ? "warms" : "cools";
-      return `Comfortable now (${here}) — ${verb} to ${TIER_LABEL[t.change.toKey]} by ${whenLabel(t.change.at)}`;
-    }
-    return `Comfortable temps (${here}) across the week`;
-  }
-  const base = `${cap(TEMP_NOW[t.nowKey])} now (${here})`;
+  const nowLabel = cap(L[t.nowKey]);
   if (t.change) {
     const verb = t.change.dir === "up" ? "warms" : "cools";
-    return `${base} — ${verb} to ${TIER_LABEL[t.change.toKey]} by ${whenLabel(t.change.at)}`;
+    return `${nowLabel} now (${here}) — ${verb} to ${L[t.change.toKey]} by ${whenLabel(t.change.at)}`;
   }
-  return base;
+  if (t.nowKey === "green") return `${nowLabel} temps (${here}) across the week`;
+  return `${nowLabel} now (${here})`;
 }
 
 function wetLine() {
@@ -59,7 +52,7 @@ function nextLine() {
   const better = sev(n.toKey) < sev(n.fromKey);
   const verb = better ? "Improves to" : "Drops to";
   const reason = n.reason && n.reason !== "conditions" ? ` (${n.reason})` : "";
-  return `Next: ${verb} ${TIER_LABEL[n.toKey]} ${whenLabel(n.at)}${reason}`;
+  return `Next: ${verb} ${props.tempLabels[n.toKey]} ${whenLabel(n.at)}${reason}`;
 }
 
 function sev(key) {

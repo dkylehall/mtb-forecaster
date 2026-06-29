@@ -30,7 +30,7 @@ function hourOf(iso) {
  *   days: Array<{date, tier, hi, lo, rainIn, reason}>
  * }}
  */
-export function summarize(result, now) {
+export function summarize(result, now, maxWindows = 3) {
   const cells = result.timeline || [];
   const nowIso = new Date(now).toISOString();
 
@@ -51,7 +51,7 @@ export function summarize(result, now) {
     wet: wetWindow(result, cells),
     next: nextChange(series),
     nextRain: nextRain(cells),
-    rideWindows: rideWindows(cells, result.sun),
+    rideWindows: rideWindows(cells, result.sun, maxWindows),
     days: dailyOutlook(cells),
   };
 }
@@ -81,34 +81,58 @@ function rideWindows(cells, sun, maxWindows = 3) {
     }
     if (!dayIdx.length) continue;
 
-    // First green daylight cell -> window start.
-    let p = 0;
-    while (p < dayIdx.length && cells[dayIdx[p]].condition.key !== "green") p++;
-    if (p >= dayIdx.length) continue; // no rideable daylight window today
+    // Find EVERY green stretch within the day's daylight (a day can have more
+    // than one — e.g. rideable morning, too-hot midday, rideable evening).
+    let i = 0;
+    while (i < dayIdx.length && windows.length < maxWindows) {
+      if (cells[dayIdx[i]].condition.key !== "green") {
+        i++;
+        continue;
+      }
+      const p = i;
+      let q = p;
+      while (q + 1 < dayIdx.length && cells[dayIdx[q + 1]].condition.key === "green") q++;
 
-    // Extend through consecutive green daylight cells.
-    let q = p;
-    while (q + 1 < dayIdx.length && cells[dayIdx[q + 1]].condition.key === "green") q++;
+      // "At sunrise" only if this is the day's first stretch AND the first
+      // daylight cell really is near sunrise (today's window starts at the
+      // current time, not this morning's sunrise).
+      const startAtSunrise =
+        p === 0 && timeOfDay(cells[dayIdx[0]].time) <= Math.floor(srH) + 1;
+      const atIso = startAtSunrise ? s.sunrise : cells[dayIdx[p]].time;
 
-    const startAtSunrise = p === 0; // green already at first light
-    const atIso = startAtSunrise ? s.sunrise : cells[dayIdx[p]].time;
+      let endIso, reason, temp = null;
+      if (q === dayIdx.length - 1) {
+        endIso = s.sunset; // ran to the end of daylight
+        reason = "sunset";
+      } else {
+        const bIdx = dayIdx[q + 1];
+        endIso = cells[bIdx].time;
+        const r = degradeReason(cells, bIdx);
+        reason = r.reason;
+        temp = r.temp;
+      }
 
-    let endIso, reason, temp = null;
-    if (q === dayIdx.length - 1) {
-      // Green ran to the end of daylight → sunset is the limiter.
-      endIso = s.sunset;
-      reason = "sunset";
-    } else {
-      // Degraded before sunset — the next daylight cell tells us why.
-      const bIdx = dayIdx[q + 1];
-      endIso = cells[bIdx].time;
-      const r = degradeReason(cells, bIdx);
-      reason = r.reason;
-      temp = r.temp;
+      const hours = Math.max(1, Math.round(timeOfDay(endIso) - timeOfDay(atIso)));
+
+      // Hourly temperature bars: rideable hours + 2 of wiggle room, each colored
+      // by its temperature tier — but never past sunset (the hard cutoff).
+      const bars = [];
+      const barCount = Math.min(hours + 2, 12);
+      for (let k = 0; k < barCount; k++) {
+        const ci = dayIdx[p] + k;
+        if (ci >= cells.length) break;
+        const c = cells[ci];
+        if (dateKey(c.time) !== day || timeOfDay(c.time) > ssH) break;
+        bars.push({
+          time: k === 0 ? atIso : c.time,
+          temp: c.temp,
+          tier: c.tempCond ? c.tempCond.key : "green",
+        });
+      }
+
+      windows.push({ at: atIso, startAtSunrise, end: endIso, hours, reason, temp, bars });
+      i = q + 1; // continue scanning for the next stretch this same day
     }
-
-    const hours = Math.max(1, Math.round(timeOfDay(endIso) - timeOfDay(atIso)));
-    windows.push({ at: atIso, startAtSunrise, end: endIso, hours, reason, temp });
   }
   return windows;
 }

@@ -9,10 +9,10 @@
 //   red:     up to +15 above / -25 below   (and anything beyond)
 
 export const TEMP_TIERS = {
-  green: { key: "green", label: "Ideal temp", color: "var(--green)", severity: 0 },
-  yellow: { key: "yellow", label: "A bit off", color: "var(--yellow)", severity: 1 },
+  green: { key: "green", label: "Ideal", color: "var(--green)", severity: 0 },
+  yellow: { key: "yellow", label: "Tolerable", color: "var(--yellow)", severity: 1 },
   orange: { key: "orange", label: "Uncomfortable", color: "var(--orange)", severity: 2 },
-  red: { key: "red", label: "Harsh temp", color: "var(--red)", severity: 3 },
+  red: { key: "red", label: "No", color: "var(--red)", severity: 3 },
 };
 
 // Degrees outside the ideal band at which each tier begins (hot side / cold side).

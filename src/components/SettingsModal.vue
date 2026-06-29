@@ -6,6 +6,16 @@ const props = defineProps({
   settings: { type: Object, required: true },
 });
 const emit = defineEmits(["close", "reset"]);
+
+// Keep the temperature tiers ordered: each tier's degrees can't be less than the
+// tier before it (bump the later one up if a previous value surpasses it).
+function normalizeTemp() {
+  const t = props.settings.temp;
+  t.orange.hot = Math.max(t.orange.hot, t.yellow.hot);
+  t.red.hot = Math.max(t.red.hot, t.orange.hot);
+  t.orange.cold = Math.max(t.orange.cold, t.yellow.cold);
+  t.red.cold = Math.max(t.red.cold, t.orange.cold);
+}
 </script>
 
 <template>
@@ -26,20 +36,33 @@ const emit = defineEmits(["close", "reset"]);
         </div>
       </section>
 
+      <!-- Ride windows to show -->
+      <section class="group">
+        <h3>Ride windows to show</h3>
+        <p class="hint">How many upcoming ideal ride windows to list per area.</p>
+        <div class="row">
+          <input type="range" min="1" max="10" step="1" v-model.number="settings.maxWindows" />
+          <span class="val">{{ settings.maxWindows }}</span>
+        </div>
+      </section>
+
       <!-- Riding (temperature) windows -->
       <section class="group">
-        <h3>Riding conditions — temperature windows</h3>
-        <p class="hint">Degrees outside your ideal band before each tier kicks in (hotter / colder).</p>
-        <div class="grid">
-          <span class="lbl"><i class="sw" style="background: var(--yellow)"></i> Fair within</span>
-          <label>+<input type="number" min="0" max="60" v-model.number="settings.temp.fairHot" />° hot</label>
-          <label>−<input type="number" min="0" max="60" v-model.number="settings.temp.fairCold" />° cold</label>
-
-          <span class="lbl"><i class="sw" style="background: var(--orange)"></i> Marginal within</span>
-          <label>+<input type="number" min="0" max="60" v-model.number="settings.temp.marginalHot" />° hot</label>
-          <label>−<input type="number" min="0" max="60" v-model.number="settings.temp.marginalCold" />° cold</label>
+        <h3>Riding conditions — temperature tiers</h3>
+        <p class="hint">Rename each tier and set how far outside your ideal band it reaches (hotter / colder).</p>
+        <div class="tlist">
+          <div class="trow">
+            <i class="sw" style="background: var(--green)"></i>
+            <input class="tlabel" v-model="settings.temp.green.label" />
+            <span class="tband">your ideal band (set on the main page)</span>
+          </div>
+          <div class="trow" v-for="k in ['yellow', 'orange', 'red']" :key="k">
+            <i class="sw" :style="{ background: 'var(--' + k + ')' }"></i>
+            <input class="tlabel" v-model="settings.temp[k].label" />
+            <label class="tval">+<input type="number" min="0" max="80" v-model.number="settings.temp[k].hot" @change="normalizeTemp" />°</label>
+            <label class="tval">−<input type="number" min="0" max="80" v-model.number="settings.temp[k].cold" @change="normalizeTemp" />°</label>
+          </div>
         </div>
-        <p class="note">Beyond Marginal reads <span style="color: var(--red)">No</span>.</p>
       </section>
 
       <!-- Trail (dry-time) windows -->
@@ -108,6 +131,20 @@ const emit = defineEmits(["close", "reset"]);
   font-variant-numeric: tabular-nums;
 }
 .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; flex: 0 0 auto; }
+
+/* Editable temperature tiers */
+.tlist { display: flex; flex-direction: column; gap: 8px; }
+.trow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tlabel {
+  flex: 1 1 120px; min-width: 100px;
+  padding: 5px 8px; font-size: 13px; font-weight: 600;
+}
+.tband { color: var(--muted); font-size: 12px; }
+.tval { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.tval input[type="number"] {
+  width: 50px; padding: 4px 6px; font-size: 13px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 
 .p-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; }
 .reset { background: transparent; color: var(--muted); }
