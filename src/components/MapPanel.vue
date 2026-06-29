@@ -2,20 +2,12 @@
 import { onMounted, onBeforeUnmount, ref, watch } from "vue";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-// Leaflet's default marker images don't resolve under bundlers; wire them up
-// explicitly so dropped/trail pins are visible.
-import iconUrl from "leaflet/dist/images/marker-icon.png";
-import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
-import shadowUrl from "leaflet/dist/images/marker-shadow.png";
-import { reverseGeocode } from "../lib/geocode.js";
-
-L.Icon.Default.mergeOptions({ iconUrl, iconRetinaUrl, shadowUrl });
 
 const props = defineProps({
   areas: { type: Array, required: true },
   conditions: { type: Object, required: true }, // id -> { result, error }
 });
-const emit = defineEmits(["add", "select", "centerchange"]);
+const emit = defineEmits(["select", "centerchange"]);
 
 // Resolve condition keys to concrete hex (SVG fill won't take CSS vars reliably).
 const COLOR = {
@@ -26,25 +18,31 @@ const COLOR = {
   none: "#5cc8ff",
 };
 
+// Cap zoom so every layer (incl. RainViewer radar, native max 12) has tiles —
+// avoids "zoom level not supported". We only need region-level detail anyway.
+const MAP_MIN_ZOOM = 3;
+const MAP_MAX_ZOOM = 12;
+
 const el = ref(null);
 const baseMode = ref(localStorage.getItem("trail_map_base") || "streets");
+const radarOn = ref(localStorage.getItem("mtb_radar") !== "off"); // default on
 let map = null;
 let markerLayer = null;
-let dropMarker = null;
 let baseLayer = null;
 let labelLayer = null;
+let radarLayer = null;
+let radarTimer = null;
 
-// Light, labeled base maps make it far easier to spot trailheads to pin than a
-// dark canvas. Satellite is great for seeing actual clearings/parking lots.
+// Light, labeled base maps make trailheads easy to spot; satellite shows the
+// actual terrain/clearings.
 const BASES = {
   streets: {
     url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    opts: { subdomains: "abcd", maxZoom: 20, attribution: "© OpenStreetMap, © CARTO" },
+    opts: { subdomains: "abcd", maxZoom: MAP_MAX_ZOOM, attribution: "© OpenStreetMap, © CARTO" },
   },
   satellite: {
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    opts: { maxZoom: 19, attribution: "© Esri, Maxar, Earthstar Geographics" },
-    // Place labels overlaid on imagery for legibility.
+    opts: { maxZoom: MAP_MAX_ZOOM, attribution: "© Esri, Maxar, Earthstar Geographics" },
     labels:
       "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
   },
@@ -90,7 +88,7 @@ function renderMarkers() {
       fillOpacity: 0.95,
     });
     m.bindTooltip(area.name, { direction: "top", offset: [0, -6] });
-    m.on("click", () => emit("select", area.id));
+    m.on("click", () => emit("select", area.id)); // jump to card
     m.addTo(markerLayer);
     pts.push([area.lat, area.lon]);
   }
@@ -99,58 +97,53 @@ function renderMarkers() {
   }
 }
 
-// Build the "Add this spot?" popup shown when a pin is dropped.
-function addPopupContent(place) {
-  const box = document.createElement("div");
-  box.className = "pin-pop";
-  const input = document.createElement("input");
-  input.type = "text";
-  input.value = place.name;
-  const region = document.createElement("div");
-  region.className = "pin-region";
-  region.textContent =
-    (place.region || "") + `  (${place.lat.toFixed(4)}, ${place.lon.toFixed(4)})`;
-  const btn = document.createElement("button");
-  btn.textContent = "Add area";
-  btn.addEventListener("click", () => {
-    emit("add", {
-      name: input.value.trim() || place.name,
-      region: place.region,
-      lat: place.lat,
-      lon: place.lon,
-    });
-    map.closePopup();
-    if (dropMarker) {
-      map.removeLayer(dropMarker);
-      dropMarker = null;
+// RainViewer precipitation radar (free, no key). Loads the latest frame.
+async function loadRadar() {
+  if (!map) return;
+  try {
+    const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+    const j = await res.json();
+    let frames = j.radar && j.radar.past ? j.radar.past.slice() : [];
+    if (j.radar && j.radar.nowcast) frames = frames.concat(j.radar.nowcast);
+    if (!frames.length) return;
+    const latest = frames[frames.length - 1];
+    const host = j.host || "https://tilecache.rainviewer.com";
+    const url = `${host}${latest.path}/256/{z}/{x}/{y}/4/1_1.png`;
+    if (radarLayer) {
+      map.removeLayer(radarLayer);
+      radarLayer = null;
     }
-  });
-  box.appendChild(input);
-  box.appendChild(region);
-  box.appendChild(btn);
-  return box;
+    radarLayer = L.tileLayer(url, { opacity: 0.65, maxNativeZoom: 12, maxZoom: MAP_MAX_ZOOM });
+    if (radarOn.value) radarLayer.addTo(map);
+  } catch {
+    /* offline / blocked — just skip radar */
+  }
 }
 
-async function onMapClick(e) {
-  const { lat, lng } = e.latlng;
-  if (dropMarker) map.removeLayer(dropMarker);
-  dropMarker = L.marker([lat, lng]).addTo(map);
-  dropMarker
-    .bindPopup("<div class='pin-pop'>Looking up this spot…</div>")
-    .openPopup();
-  const place = await reverseGeocode(lat, lng);
-  if (!dropMarker) return; // user may have added/closed already
-  dropMarker.setPopupContent(addPopupContent(place));
+function toggleRadar() {
+  radarOn.value = !radarOn.value;
+  try {
+    localStorage.setItem("mtb_radar", radarOn.value ? "on" : "off");
+  } catch {
+    /* ignore */
+  }
+  if (!radarLayer) {
+    if (radarOn.value) loadRadar();
+    return;
+  }
+  if (radarOn.value) radarLayer.addTo(map);
+  else map.removeLayer(radarLayer);
 }
 
 onMounted(() => {
-  map = L.map(el.value, { zoomControl: true, attributionControl: true }).setView(
-    [38.2, -78.7],
-    7
-  );
+  map = L.map(el.value, {
+    zoomControl: true,
+    attributionControl: true,
+    minZoom: MAP_MIN_ZOOM,
+    maxZoom: MAP_MAX_ZOOM,
+  }).setView([38.2, -78.7], 7);
   setBase(baseMode.value);
   markerLayer = L.layerGroup().addTo(map);
-  map.on("click", onMapClick);
   // Bias place search toward wherever the map is looking.
   const emitCenter = () => {
     const c = map.getCenter();
@@ -159,28 +152,46 @@ onMounted(() => {
   map.on("moveend", emitCenter);
   emitCenter();
   renderMarkers();
+  loadRadar();
+  radarTimer = setInterval(loadRadar, 5 * 60 * 1000); // refresh radar every 5 min
   setTimeout(() => map && map.invalidateSize(), 200);
 });
 
 onBeforeUnmount(() => {
+  if (radarTimer) clearInterval(radarTimer);
   if (map) map.remove();
   map = null;
 });
 
 watch(() => props.areas, renderMarkers, { deep: true });
 watch(() => props.conditions, renderMarkers, { deep: true });
+
+// Let the parent recentre/zoom the map on a specific area.
+defineExpose({
+  focus(area) {
+    if (map && area) map.setView([area.lat, area.lon], Math.max(map.getZoom(), 10), { animate: true });
+  },
+});
 </script>
 
 <template>
   <div class="map-panel">
     <div class="maptop">
-      <div class="hint">📍 Click the map to drop a pin on an exact trailhead.</div>
-      <div class="base-toggle">
-        <button :class="{ on: baseMode === 'streets' }" @click="setBase('streets')">Map</button>
-        <button :class="{ on: baseMode === 'satellite' }" @click="setBase('satellite')">Satellite</button>
+      <div class="hint">Tap a dot to jump to its card.</div>
+      <div class="map-ctrls">
+        <button class="ctrl" :class="{ on: radarOn }" @click="toggleRadar">🌧️ Radar</button>
+        <div class="base-toggle">
+          <button :class="{ on: baseMode === 'streets' }" @click="setBase('streets')">Map</button>
+          <button :class="{ on: baseMode === 'satellite' }" @click="setBase('satellite')">Satellite</button>
+        </div>
       </div>
     </div>
     <div ref="el" class="map"></div>
+    <div v-if="radarOn" class="radar-legend">
+      <span>Light</span>
+      <span class="bar"></span>
+      <span>Heavy</span>
+    </div>
   </div>
 </template>
 
@@ -195,6 +206,12 @@ watch(() => props.conditions, renderMarkers, { deep: true });
 }
 .maptop { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 0 0 auto; }
 .hint { color: var(--muted); font-size: 12px; }
+.map-ctrls { display: flex; align-items: center; gap: 8px; }
+.ctrl {
+  padding: 5px 10px; font-size: 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card); color: var(--muted);
+}
+.ctrl.on { color: var(--text); border-color: var(--accent); background: var(--card-2); }
 .base-toggle { display: flex; gap: 0; flex: 0 0 auto; }
 .base-toggle button {
   padding: 5px 11px; font-size: 12px; border-radius: 0;
@@ -211,23 +228,17 @@ watch(() => props.conditions, renderMarkers, { deep: true });
   box-shadow: var(--shadow);
   background: #0a0e1c;
 }
+.radar-legend {
+  display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
+  font-size: 11px; color: var(--muted);
+}
+.radar-legend .bar {
+  flex: 0 0 auto; width: 110px; height: 7px; border-radius: 6px;
+  background: linear-gradient(90deg, #1a73e8, #34d399, #fbbf24, #ef4444, #d946ef);
+}
 
 @media (max-width: 900px) {
   .map-panel { position: static; height: auto; }
   .map { height: 340px; }
-}
-</style>
-
-<style>
-/* Popup contents are created outside the scoped tree, so style globally. */
-.pin-pop { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
-.pin-pop input {
-  font: inherit; padding: 6px 8px; border-radius: 8px;
-  border: 1px solid var(--line); background: #fff; color: #111;
-}
-.pin-pop .pin-region { font-size: 11px; color: #555; }
-.pin-pop button {
-  font: inherit; padding: 6px 10px; border-radius: 8px; cursor: pointer;
-  border: 1px solid var(--accent); background: var(--accent); color: #06203a; font-weight: 600;
 }
 </style>

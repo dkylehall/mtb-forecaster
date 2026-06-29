@@ -1,31 +1,150 @@
 <script setup>
-import { ref, reactive, onMounted, watch } from "vue";
+import { ref, reactive, onMounted, watch, computed, nextTick } from "vue";
 import Sortable from "sortablejs";
 import AddArea from "./components/AddArea.vue";
 import AreaCard from "./components/AreaCard.vue";
 import MapPanel from "./components/MapPanel.vue";
+import SettingsModal from "./components/SettingsModal.vue";
 import { fetchTrailWeather } from "./lib/weather.js";
-import { computeConditions } from "./lib/drying.js";
-import { DEFAULT_IDEAL } from "./lib/temperature.js";
+import { computeConditions, DEFAULT_DRY_CUTOFFS } from "./lib/drying.js";
+import { DEFAULT_IDEAL, TEMP_THRESHOLDS } from "./lib/temperature.js";
 import {
   loadAreas,
   saveAreas,
   addArea,
   removeArea,
-  setDrainage,
   findExisting,
   SEED_AREAS,
 } from "./lib/areas.js";
 
-const LOOKBACK_KEY = "trail_lookback_days_v1";
 const IDEAL_KEY = "trail_ideal_temp_v1";
+const SETTINGS_KEY = "mtb_settings_v1";
+const COLLAPSED_KEY = "mtb_collapsed_v1";
 
 const areas = ref([]);
 // id -> { result, error, loading }
 const conditions = reactive({});
 const selectedId = ref(null);
+
+// Per-area collapsed state (id -> bool), persisted.
+const collapsed = reactive(loadCollapsed());
+function loadCollapsed() {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY));
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+function persistCollapsed() {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
+  } catch {
+    /* ignore */
+  }
+}
+function toggleCollapse(id) {
+  collapsed[id] = !collapsed[id];
+  persistCollapsed();
+}
+function collapseAll() {
+  areas.value.forEach((a) => (collapsed[a.id] = true));
+  persistCollapsed();
+}
+function expandAll() {
+  areas.value.forEach((a) => (collapsed[a.id] = false));
+  persistCollapsed();
+}
 const mapCenter = ref({ lat: 38.2, lon: -78.7 }); // search bias, follows the map
 const boardEl = ref(null);
+const showSettings = ref(false);
+
+// Adjustable scoring settings (edited in the Settings modal). Defaults come from
+// the engine constants so they stay in sync.
+const DEFAULT_SETTINGS = {
+  lookbackDays: 3,
+  temp: {
+    fairHot: TEMP_THRESHOLDS.yellow.hot,
+    fairCold: TEMP_THRESHOLDS.yellow.cold,
+    marginalHot: TEMP_THRESHOLDS.orange.hot,
+    marginalCold: TEMP_THRESHOLDS.orange.cold,
+  },
+  dry: { drying: DEFAULT_DRY_CUTOFFS.drying, wet: DEFAULT_DRY_CUTOFFS.wet },
+};
+
+function loadSettings() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    if (v && typeof v === "object") {
+      const lb = parseInt(v.lookbackDays, 10);
+      return {
+        lookbackDays: lb >= 3 && lb <= 7 ? lb : DEFAULT_SETTINGS.lookbackDays,
+        temp: { ...DEFAULT_SETTINGS.temp, ...(v.temp || {}) },
+        dry: { ...DEFAULT_SETTINGS.dry, ...(v.dry || {}) },
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  return JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+}
+
+const settings = reactive(loadSettings());
+
+function persistSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    /* ignore */
+  }
+}
+
+function resetSettings() {
+  const d = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+  settings.lookbackDays = d.lookbackDays;
+  Object.assign(settings.temp, d.temp);
+  Object.assign(settings.dry, d.dry);
+}
+
+// Map settings → engine threshold shapes.
+function tempThresholds() {
+  return {
+    yellow: { hot: settings.temp.fairHot, cold: settings.temp.fairCold },
+    orange: { hot: settings.temp.marginalHot, cold: settings.temp.marginalCold },
+  };
+}
+function dryCutoffs() {
+  return { drying: settings.dry.drying, wet: settings.dry.wet };
+}
+
+// Legend rows, derived reactively from the current settings.
+const degLabel = (hot, cold) => (hot === cold ? `±${hot}°` : `+${hot}°/−${cold}°`);
+const ridingKey = computed(() => [
+  { color: "var(--green)", label: "Ideal", note: "" },
+  { color: "var(--yellow)", label: "Fair", note: degLabel(settings.temp.fairHot, settings.temp.fairCold) },
+  { color: "var(--orange)", label: "Marginal", note: degLabel(settings.temp.marginalHot, settings.temp.marginalCold) },
+  { color: "var(--red)", label: "No", note: `beyond ${degLabel(settings.temp.marginalHot, settings.temp.marginalCold)}` },
+]);
+const trailKey = computed(() => [
+  { color: "var(--green)", label: "Dry", note: "rideable" },
+  { color: "var(--yellow)", label: "Drying", note: `≤${settings.dry.drying}h to dry` },
+  { color: "var(--orange)", label: "Very wet", note: `${settings.dry.drying}–${settings.dry.wet}h to dry` },
+  { color: "var(--red)", label: "Soaked", note: `>${settings.dry.wet}h to dry` },
+]);
+
+// React to settings changes: lookback needs a refetch; temp/dry only recompute.
+watch(() => settings.lookbackDays, () => {
+  persistSettings();
+  refreshAll();
+});
+watch(
+  () => [settings.temp, settings.dry],
+  () => {
+    persistSettings();
+    recomputeAll();
+  },
+  { deep: true }
+);
 
 // Drag-to-reorder the cards (via the grip handle), persisting the new order.
 let sortable = null;
@@ -36,8 +155,13 @@ watch(boardEl, (el) => {
   }
   if (el) {
     sortable = Sortable.create(el, {
-      handle: ".drag-handle",
+      // Whole card is draggable; clicks and the listed controls still work
+      // (Sortable only reorders on an actual drag movement).
+      draggable: ".area-card",
+      filter: "button, select, input, a, .leaflet-container",
+      preventOnFilter: false,
       animation: 160,
+      disabled: sortBy.value !== "custom", // drag only in manual order
       onEnd: onDragEnd,
     });
   }
@@ -53,15 +177,47 @@ function onDragEnd(evt) {
   persist();
 }
 
-// How many days of past rainfall to factor into current wetness (3–7).
-const lookbackDays = ref(loadLookback());
+// Sort control: drag order (manual), name, or best conditions.
+const SORT_KEY = "mtb_sort";
+const sortBy = ref(localStorage.getItem(SORT_KEY) || "custom");
+watch(sortBy, (v) => {
+  try {
+    localStorage.setItem(SORT_KEY, v);
+  } catch {
+    /* ignore */
+  }
+  if (sortable) sortable.option("disabled", v !== "custom");
+});
+
+// Temperature distance from the ideal band (0 = inside). Used as the primary
+// sort key for "best conditions", with hours-until-dry as the tiebreak.
+function tempVarOf(r) {
+  if (!r || r.tempNow == null) return Infinity;
+  return Math.max(0, r.tempNow - ideal.max, ideal.min - r.tempNow);
+}
+
+const displayedAreas = computed(() => {
+  const list = areas.value;
+  if (sortBy.value === "name") {
+    return [...list].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  if (sortBy.value === "conditions") {
+    return [...list].sort((a, b) => {
+      const ra = conditions[a.id] && conditions[a.id].result;
+      const rb = conditions[b.id] && conditions[b.id].result;
+      const ta = tempVarOf(ra);
+      const tb = tempVarOf(rb);
+      if (ta !== tb) return ta - tb; // closer to ideal temp first
+      const ha = ra ? ra.hoursUntilDry : Infinity;
+      const hb = rb ? rb.hoursUntilDry : Infinity;
+      return ha - hb; // then drier first
+    });
+  }
+  return list; // custom / drag order
+});
+
 // Ideal riding temperature band (°F).
 const ideal = reactive(loadIdeal());
-
-function loadLookback() {
-  const n = parseInt(localStorage.getItem(LOOKBACK_KEY), 10);
-  return n >= 3 && n <= 7 ? n : 3;
-}
 
 function loadIdeal() {
   try {
@@ -71,15 +227,6 @@ function loadIdeal() {
     /* fall through */
   }
   return { ...DEFAULT_IDEAL };
-}
-
-function onLookbackChange() {
-  try {
-    localStorage.setItem(LOOKBACK_KEY, String(lookbackDays.value));
-  } catch {
-    /* ignore */
-  }
-  refreshAll(); // re-fetch every area with the new window
 }
 
 function onIdealChange() {
@@ -111,6 +258,9 @@ function recompute(area) {
     drainage: area.drainage,
     idealTempMin: ideal.min,
     idealTempMax: ideal.max,
+    dryCutoffs: dryCutoffs(),
+    tempThresholds: tempThresholds(),
+    daily: c.wx.daily,
   });
 }
 
@@ -134,7 +284,7 @@ async function refreshArea(area, attempt = 0) {
   conditions[area.id] = { result: prev.result || null, error: "", loading: true, wx: prev.wx || null };
   try {
     const wx = await fetchTrailWeather(area.lat, area.lon, {
-      pastDays: lookbackDays.value,
+      pastDays: settings.lookbackDays,
     });
     conditions[area.id] = { result: null, error: "", loading: false, wx };
     recompute(area); // fills .result using the current ideal band
@@ -179,11 +329,17 @@ function onRemove(id) {
   persist();
 }
 
-function onDrainage(id, drainage) {
-  areas.value = setDrainage(areas.value, id, drainage);
-  persist();
-  const area = areas.value.find((a) => a.id === id);
-  if (area) recompute(area); // soil change → recompute, no refetch
+// Clicking a map dot: highlight, expand, and scroll its card into view.
+function onMarkerSelect(id) {
+  selectedId.value = id;
+  if (collapsed[id]) {
+    collapsed[id] = false;
+    persistCollapsed();
+  }
+  nextTick(() => {
+    const elc = document.querySelector(`[data-card="${id}"]`);
+    if (elc) elc.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
 }
 
 onMounted(() => {
@@ -208,24 +364,11 @@ onMounted(() => {
       <div class="controls">
         <AddArea :bias="mapCenter" @add="onAdd" />
         <button class="refresh" title="Refresh all" @click="refreshAll">↻</button>
+        <button class="refresh" title="Settings" @click="showSettings = true">⚙</button>
       </div>
     </header>
 
     <div class="settings">
-      <div class="setting">
-        <label for="lookback">Rainfall lookback</label>
-        <input
-          id="lookback"
-          type="range"
-          min="3"
-          max="7"
-          step="1"
-          v-model.number="lookbackDays"
-          @change="onLookbackChange"
-        />
-        <span class="val">{{ lookbackDays }}d</span>
-      </div>
-
       <div class="setting">
         <label>Ideal riding temp</label>
         <input
@@ -250,32 +393,57 @@ onMounted(() => {
         <span class="val">°F</span>
       </div>
 
-      <div class="legend">
-        <span><i class="sw" style="background: var(--green)"></i> Ride</span>
-        <span><i class="sw" style="background: var(--yellow)"></i> Fair</span>
-        <span><i class="sw" style="background: var(--orange)"></i> Marginal</span>
-        <span><i class="sw" style="background: var(--red)"></i> No</span>
+    </div>
+
+    <div class="key">
+      <div class="key-row">
+        <span class="key-title">Riding conditions</span>
+        <span v-for="t in ridingKey" :key="t.label" class="k">
+          <i class="sw" :style="{ background: t.color }"></i>
+          {{ t.label }} <small v-if="t.note">({{ t.note }})</small>
+        </span>
+      </div>
+      <div class="key-row">
+        <span class="key-title">Trail conditions</span>
+        <span v-for="t in trailKey" :key="t.label" class="k">
+          <i class="sw" :style="{ background: t.color }"></i>
+          {{ t.label }} <small v-if="t.note">({{ t.note }})</small>
+        </span>
       </div>
     </div>
 
     <div class="layout">
       <main class="left">
+        <div v-if="areas.length" class="board-tools">
+          <button @click="expandAll">Expand all</button>
+          <button @click="collapseAll">Collapse all</button>
+          <label class="sort">
+            Sort
+            <select v-model="sortBy">
+              <option value="custom">Drag order</option>
+              <option value="name">Name A–Z</option>
+              <option value="conditions">Best conditions</option>
+            </select>
+          </label>
+        </div>
         <div v-if="areas.length" ref="boardEl" class="board">
           <AreaCard
-            v-for="area in areas"
+            v-for="area in displayedAreas"
             :key="area.id"
+            :data-card="area.id"
             :area="area"
             :result="conditions[area.id] ? conditions[area.id].result : null"
             :current="conditions[area.id] && conditions[area.id].wx ? conditions[area.id].wx.current : null"
             :error="conditions[area.id] ? conditions[area.id].error : ''"
             :selected="area.id === selectedId"
+            :collapsed="!!collapsed[area.id]"
             @remove="onRemove"
-            @drainage="onDrainage"
-            @select="selectedId = area.id"
+            @select="selectedId = $event"
+            @toggle="toggleCollapse"
           />
         </div>
         <p v-else class="empty">
-          No areas yet — search above or click the map to add your first riding spot.
+          No areas yet — search above to add your first riding spot.
         </p>
       </main>
 
@@ -283,8 +451,7 @@ onMounted(() => {
         <MapPanel
           :areas="areas"
           :conditions="conditions"
-          @add="onAdd"
-          @select="selectedId = $event"
+          @select="onMarkerSelect"
           @centerchange="mapCenter = $event"
         />
       </aside>
@@ -295,6 +462,13 @@ onMounted(() => {
       for soil) and your ideal temperature band. Weather from Open-Meteo; places from
       OpenStreetMap. Estimates only — your local trail may vary.
     </footer>
+
+    <SettingsModal
+      v-if="showSettings"
+      :settings="settings"
+      @reset="resetSettings"
+      @close="showSettings = false"
+    />
   </div>
 </template>
 
@@ -334,20 +508,54 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
 .setting .dash { color: var(--muted); }
 .val { color: var(--text); font-variant-numeric: tabular-nums; font-size: 12.5px; }
 
-.legend { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-left: auto; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.key {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 16px; padding: 10px 14px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+}
+.key-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.key-title {
+  flex: 0 0 116px;
+  text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px;
+  color: var(--muted); font-weight: 650;
+}
+.k { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.k small { color: var(--muted); }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: 0 0 auto; }
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(340px, 38vw, 560px);
+  grid-template-columns: 1fr 1fr;
   gap: 18px;
   align-items: start;
 }
+/* Cards scroll in their own pane so the map + tools stay put. */
+.left {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+}
+.board-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex: 0 0 auto; }
+.board-tools button { font-size: 12px; padding: 5px 11px; }
+.sort {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
+}
+.sort select {
+  background: var(--card); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+  text-transform: none; letter-spacing: 0;
+}
 .board {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 6px;
 }
 .empty { color: var(--muted); }
 
@@ -359,6 +567,7 @@ footer {
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
   .right { order: -1; } /* map on top when stacked */
-  .legend { margin-left: 0; }
+  .left { position: static; max-height: none; }
+  .board { overflow: visible; padding-right: 0; }
 }
 </style>

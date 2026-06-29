@@ -31,13 +31,13 @@ export const DEFAULT_IDEAL = { min: 70, max: 76 };
  * @param {number} idealMax
  * @returns {object} a TEMP_TIERS entry
  */
-export function tempCondition(temp, idealMin, idealMax) {
+export function tempCondition(temp, idealMin, idealMax, thresholds = TEMP_THRESHOLDS) {
   if (temp == null || Number.isNaN(temp)) return TEMP_TIERS.green;
   if (temp >= idealMin && temp <= idealMax) return TEMP_TIERS.green;
 
   const over = temp > idealMax ? temp - idealMax : 0; // too hot by this much
   const under = temp < idealMin ? idealMin - temp : 0; // too cold by this much
-  const t = TEMP_THRESHOLDS;
+  const t = thresholds;
 
   if (over > 0) {
     if (over <= t.yellow.hot) return TEMP_TIERS.yellow;

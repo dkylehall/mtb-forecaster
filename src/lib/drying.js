@@ -24,18 +24,26 @@ export const DRAINAGE = {
   slow: 1.5, // clay / poorly draining
 };
 
-// Riding-condition tiers, keyed on hours-until-dry. Order matters (first match wins).
-// `severity` lets us combine independent dimensions (dryness, temperature, …) by
-// taking the worst one.
+// Riding-condition tiers. `severity` lets us combine independent dimensions
+// (dryness, temperature, …) by taking the worst one.
 export const CONDITIONS = [
-  { key: "green", label: "Ride now", color: "var(--green)", maxHours: 0, severity: 0 },
-  { key: "yellow", label: "Almost dry", color: "var(--yellow)", maxHours: 4, severity: 1 },
-  { key: "orange", label: "Still wet", color: "var(--orange)", maxHours: 12, severity: 2 },
-  { key: "red", label: "Too wet", color: "var(--red)", maxHours: Infinity, severity: 3 },
+  { key: "green", label: "Ride now", color: "var(--green)", severity: 0 },
+  { key: "yellow", label: "Almost dry", color: "var(--yellow)", severity: 1 },
+  { key: "orange", label: "Still wet", color: "var(--orange)", severity: 2 },
+  { key: "red", label: "Too wet", color: "var(--red)", severity: 3 },
 ];
+const TIER = Object.fromEntries(CONDITIONS.map((c) => [c.key, c]));
 
-export function conditionFor(hoursUntilDry) {
-  return CONDITIONS.find((c) => hoursUntilDry <= c.maxHours);
+// Hours-until-dry cutoffs separating the dryness tiers (configurable via settings).
+export const DEFAULT_DRY_CUTOFFS = { drying: 4, wet: 12 };
+
+// Classify hours-until-dry into a tier: green (dry), yellow (≤drying), orange
+// (≤wet), red (beyond).
+export function conditionFor(hoursUntilDry, cutoffs = DEFAULT_DRY_CUTOFFS) {
+  if (hoursUntilDry <= 0) return TIER.green;
+  if (hoursUntilDry <= cutoffs.drying) return TIER.yellow;
+  if (hoursUntilDry <= cutoffs.wet) return TIER.orange;
+  return TIER.red;
 }
 
 // Combine two condition objects: the worse (higher severity) one wins.
@@ -133,7 +141,18 @@ function hoursUntilDryForward(times, precip, nowMs, startWetness, dryRate) {
  * @returns {Array<{ time, wetness, precip, hoursUntilDry, temp,
  *                   dry: object, tempCond: object, condition: object }>}
  */
-function buildTimeline(times, precip, nowMs, startWetness, dryRate, maxHours, temp, ideal) {
+function buildTimeline(
+  times,
+  precip,
+  nowMs,
+  startWetness,
+  dryRate,
+  maxHours,
+  temp,
+  ideal,
+  dryCutoffs,
+  tempThresholds
+) {
   const out = [];
   let w = startWetness;
   const startIdx = indexAtOrBefore(times, nowMs);
@@ -148,9 +167,9 @@ function buildTimeline(times, precip, nowMs, startWetness, dryRate, maxHours, te
     }
     // Hours-until-dry as of THIS hour, assuming no further rain after it.
     const hud = w / dryRate;
-    const dry = conditionFor(hud);
+    const dry = conditionFor(hud, dryCutoffs);
     const tval = temp ? temp[i] : null;
-    const tempCond = ideal ? tempCondition(tval, ideal.min, ideal.max) : null;
+    const tempCond = ideal ? tempCondition(tval, ideal.min, ideal.max, tempThresholds) : null;
     out.push({
       time: times[i],
       wetness: round2(w),
@@ -190,7 +209,19 @@ export function computeConditions(opts) {
     timelineHours = 24 * 7, // cover the full week so summaries can look ahead
     idealTempMin = null,
     idealTempMax = null,
+    dryCutoffs = DEFAULT_DRY_CUTOFFS,
+    tempThresholds = undefined, // falls back to temperature.js default
+    daily = null, // { time[], sunrise[], sunset[] } for daylight-aware windows
   } = opts;
+
+  // Build a date -> { sunrise, sunset } lookup for ride-window clamping.
+  let sun = null;
+  if (daily && daily.time && daily.sunrise && daily.sunset) {
+    sun = {};
+    for (let i = 0; i < daily.time.length; i++) {
+      sun[daily.time[i]] = { sunrise: daily.sunrise[i], sunset: daily.sunset[i] };
+    }
+  }
 
   const ideal =
     idealTempMin != null && idealTempMax != null
@@ -212,9 +243,9 @@ export function computeConditions(opts) {
   for (let i = 0; i <= upTo; i++) recentRainIn += precip[i] || 0;
 
   // Current-hour conditions: dryness, temperature, and the combined headline.
-  const dryCond = conditionFor(hoursUntilDry);
+  const dryCond = conditionFor(hoursUntilDry, dryCutoffs);
   const tempNow = temp ? temp[upTo] : null;
-  const tempCond = ideal ? tempCondition(tempNow, ideal.min, ideal.max) : null;
+  const tempCond = ideal ? tempCondition(tempNow, ideal.min, ideal.max, tempThresholds) : null;
 
   return {
     wetness: round2(wetness),
@@ -225,6 +256,7 @@ export function computeConditions(opts) {
     tempCondition: tempCond,
     condition: worse(dryCond, tempCond), // combined headline
     recentRainIn: round2(recentRainIn),
+    sun,
     timeline: buildTimeline(
       times,
       precip,
@@ -233,7 +265,9 @@ export function computeConditions(opts) {
       dryRate,
       timelineHours,
       temp,
-      ideal
+      ideal,
+      dryCutoffs,
+      tempThresholds
     ),
   };
 }

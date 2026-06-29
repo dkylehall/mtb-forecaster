@@ -107,16 +107,16 @@ describe("next rain", () => {
   });
 });
 
-describe("next best ride", () => {
-  it("finds the next daytime hour where temp and dryness both align", () => {
+describe("optimal ride windows", () => {
+  it("finds the next daytime window where temp and dryness both align", () => {
     const n = 96;
     const times = hours("2026-06-01T00:00:00Z", n);
     const precip = precipAt(n, [[4, 0.5]]); // dry by ~16:00 (4pm, daytime)
     const temp = new Array(n).fill(73); // ideal all week
     const r = computeConditions({ times, precip, temp, now: times[4], ...IDEAL });
     const s = summarize(r, times[4]);
-    expect(s.bestRide).toBeTruthy();
-    expect(new Date(s.bestRide.at).getUTCHours()).toBe(16);
+    expect(s.rideWindows.length).toBeGreaterThanOrEqual(1);
+    expect(new Date(s.rideWindows[0].at).getUTCHours()).toBe(16);
   });
 
   it("reports the window end + reason when temp climbs out of band", () => {
@@ -127,13 +127,59 @@ describe("next best ride", () => {
     const temp = times.map((_, i) => (i < 11 ? 73 : 95));
     const r = computeConditions({ times, precip, temp, now: times[8], ...IDEAL });
     const s = summarize(r, times[8]);
-    expect(s.bestRide).toBeTruthy();
-    expect(s.bestRide.reason).toBe("temp too high");
+    const w = s.rideWindows[0];
+    expect(w).toBeTruthy();
+    expect(w.reason).toBe("heat");
+    expect(w.temp).toBe(95); // the triggering temperature
     // window ends right when it gets too hot (hour 11)
-    expect(new Date(s.bestRide.end).getUTCHours()).toBe(11);
+    expect(new Date(w.end).getUTCHours()).toBe(11);
   });
 
-  it("is null when temp never enters the ideal band", () => {
+  it("clamps a window at sunset rather than running into the night", () => {
+    const n = 48;
+    const times = hours("2026-06-01T00:00:00Z", n);
+    const precip = precipAt(n, []); // dry
+    const temp = new Array(n).fill(73); // ideal all day & night
+    // Explicit sun times: sunrise 06:00, sunset 20:00 UTC.
+    const daily = {
+      time: ["2026-06-01", "2026-06-02"],
+      sunrise: ["2026-06-01T06:00:00Z", "2026-06-02T06:00:00Z"],
+      sunset: ["2026-06-01T20:00:00Z", "2026-06-02T20:00:00Z"],
+    };
+    const r = computeConditions({ times, precip, temp, now: times[0], ...IDEAL, daily });
+    const s = summarize(r, times[0]);
+    const w = s.rideWindows[0];
+    expect(w.startAtSunrise).toBe(true);
+    expect(w.reason).toBe("sunset");
+    expect(new Date(w.end).getUTCHours()).toBe(20); // clamped to sunset, not 11h into night
+  });
+
+  it("returns multiple windows across days when temp dips out of band nightly", () => {
+    const n = 96; // 4 days
+    const times = hours("2026-06-01T00:00:00Z", n);
+    const precip = precipAt(n, []); // dry all week
+    // Ideal (73°) from 8am–6pm, cold (50°) otherwise, so green breaks each night.
+    const temp = times.map((iso) => {
+      const h = new Date(iso).getUTCHours();
+      return h >= 8 && h < 18 ? 73 : 50;
+    });
+    // Sunrise 8am / sunset 6pm UTC so windows start exactly at first light.
+    const dates = ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"];
+    const daily = {
+      time: dates,
+      sunrise: dates.map((d) => `${d}T08:00:00Z`),
+      sunset: dates.map((d) => `${d}T18:00:00Z`),
+    };
+    const r = computeConditions({ times, precip, temp, now: times[0], ...IDEAL, daily });
+    const s = summarize(r, times[0]);
+    expect(s.rideWindows.length).toBe(3); // capped at 3
+    for (const w of s.rideWindows) {
+      expect(w.startAtSunrise).toBe(true);
+      expect(new Date(w.at).getUTCHours()).toBe(8);
+    }
+  });
+
+  it("is empty when temp never enters the ideal band", () => {
     const n = 96;
     const times = hours("2026-06-01T00:00:00Z", n);
     const r = computeConditions({
@@ -144,7 +190,7 @@ describe("next best ride", () => {
       ...IDEAL,
     });
     const s = summarize(r, times[0]);
-    expect(s.bestRide).toBeNull();
+    expect(s.rideWindows).toEqual([]);
   });
 });
 

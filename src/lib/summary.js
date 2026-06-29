@@ -51,51 +51,98 @@ export function summarize(result, now) {
     wet: wetWindow(result, cells),
     next: nextChange(series),
     nextRain: nextRain(cells),
-    bestRide: bestRide(cells),
+    rideWindows: rideWindows(cells, result.sun),
     days: dailyOutlook(cells),
   };
 }
 
-// The next daytime window when BOTH temperature and dryness are green (combined
-// green requires both). Returns the start/end of that contiguous green run, its
-// length, and the reason it ends (what degrades first): "temp too high/low",
-// "rain", or null if it runs to the end of the forecast. Null if they never
-// align within the horizon.
-function bestRide(cells) {
-  let start = -1;
-  for (let i = 0; i < cells.length; i++) {
-    const h = hourOf(cells[i].time);
-    if (h >= 8 && h < 18 && cells[i].condition.key === "green") {
-      start = i;
-      break;
+// Up-to-N ride windows: per day, the first stretch where BOTH temperature and
+// dryness are green, clamped to daylight (sunrise..sunset). Each window reports
+// whether it begins at sunrise, its end, length in hours, and WHY it ends —
+// "sunset", or a degradation ("heat"/"cold" with the triggering temp, "rain",
+// "wet"). Falls back to an 8am–6pm daylight assumption if no sun times given.
+function rideWindows(cells, sun, maxWindows = 3) {
+  const sunMap = sun || synthSun(cells);
+  const windows = [];
+  for (const day of Object.keys(sunMap).sort()) {
+    if (windows.length >= maxWindows) break;
+    const s = sunMap[day];
+    if (!s || !s.sunrise || !s.sunset) continue;
+    const srH = timeOfDay(s.sunrise);
+    const ssH = timeOfDay(s.sunset);
+
+    // Daylight cells for this day, compared by wall-clock (TZ-agnostic — both
+    // cells and sun times are in the location's local time).
+    const dayIdx = [];
+    for (let i = 0; i < cells.length; i++) {
+      if (dateKey(cells[i].time) !== day) continue;
+      const h = timeOfDay(cells[i].time);
+      if (h >= Math.floor(srH) && h <= ssH) dayIdx.push(i);
     }
+    if (!dayIdx.length) continue;
+
+    // First green daylight cell -> window start.
+    let p = 0;
+    while (p < dayIdx.length && cells[dayIdx[p]].condition.key !== "green") p++;
+    if (p >= dayIdx.length) continue; // no rideable daylight window today
+
+    // Extend through consecutive green daylight cells.
+    let q = p;
+    while (q + 1 < dayIdx.length && cells[dayIdx[q + 1]].condition.key === "green") q++;
+
+    const startAtSunrise = p === 0; // green already at first light
+    const atIso = startAtSunrise ? s.sunrise : cells[dayIdx[p]].time;
+
+    let endIso, reason, temp = null;
+    if (q === dayIdx.length - 1) {
+      // Green ran to the end of daylight → sunset is the limiter.
+      endIso = s.sunset;
+      reason = "sunset";
+    } else {
+      // Degraded before sunset — the next daylight cell tells us why.
+      const bIdx = dayIdx[q + 1];
+      endIso = cells[bIdx].time;
+      const r = degradeReason(cells, bIdx);
+      reason = r.reason;
+      temp = r.temp;
+    }
+
+    const hours = Math.max(1, Math.round(timeOfDay(endIso) - timeOfDay(atIso)));
+    windows.push({ at: atIso, startAtSunrise, end: endIso, hours, reason, temp });
   }
-  if (start < 0) return null;
+  return windows;
+}
 
-  let i = start;
-  while (i < cells.length && cells[i].condition.key === "green") i++;
-  const endIdx = i; // first non-green cell, or cells.length
-  const at = cells[start].time;
-  const end = endIdx < cells.length ? cells[endIdx].time : cells[cells.length - 1].time;
+// Hour-of-day as a decimal (e.g. "…T05:54" → 5.9), read straight from the
+// string so it's independent of the runtime timezone.
+function timeOfDay(iso) {
+  return Number(iso.slice(11, 13)) + Number(iso.slice(14, 16)) / 60;
+}
 
-  let reason = null;
-  if (endIdx < cells.length) {
-    const b = cells[endIdx];
-    const prev = cells[endIdx - 1];
-    const dryBroke = b.dry && b.dry.key !== "green";
-    const tempBroke = b.tempCond && b.tempCond.key !== "green";
-    const gotWetter = (b.precip || 0) > 0 || (b.wetness || 0) > (prev.wetness || 0);
-    if (dryBroke && gotWetter) reason = "rain";
-    else if (tempBroke) {
-      reason =
-        b.temp != null && prev.temp != null && b.temp >= prev.temp
-          ? "temp too high"
-          : "temp too low";
-    } else if (dryBroke) reason = "trail wet";
-    else reason = "weather";
+// Fallback daylight (8am–6pm) per date present in the timeline.
+function synthSun(cells) {
+  const out = {};
+  for (const c of cells) {
+    const d = dateKey(c.time);
+    if (!out[d]) out[d] = { sunrise: `${d}T08:00`, sunset: `${d}T18:00` };
   }
+  return out;
+}
 
-  return { at, end, hours: endIdx - start, reason };
+// Why a green stretch ends at the degrading cell `idx`.
+function degradeReason(cells, idx) {
+  const b = cells[idx];
+  const prev = cells[idx - 1];
+  const dryBroke = b.dry && b.dry.key !== "green";
+  const tempBroke = b.tempCond && b.tempCond.key !== "green";
+  const gotWetter = (b.precip || 0) > 0 || (b.wetness || 0) > (prev?.wetness || 0);
+  if (dryBroke && gotWetter) return { reason: "rain", temp: null };
+  if (tempBroke) {
+    const hot = b.temp != null && prev?.temp != null && b.temp >= prev.temp;
+    return { reason: hot ? "heat" : "cold", temp: b.temp };
+  }
+  if (dryBroke) return { reason: "wet", temp: null };
+  return { reason: "weather", temp: null };
 }
 
 // Next forecast rain: the first upcoming wet hour, with the total of that
