@@ -1,0 +1,23 @@
+{
+  "name": "trail-conditions",
+  "version": "0.1.0",
+  "description": "Mountain-bike trail-condition board: estimates when trails are dry enough to ride based on past and forecast rainfall.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,55 @@
+:root {
+  --bg: #0b1020;
+  --card: #131a2e;
+  --card-2: #18213a;
+  --line: #243150;
+  --text: #e8edf7;
+  --muted: #93a0bd;
+  --accent: #5cc8ff;
+
+  /* Riding-condition palette */
+  --green: #5be0a0;
+  --yellow: #ffe45c;
+  --orange: #ffb454;
+  --red: #ff6b6b;
+
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --radius: 16px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 800px at 80% -10%, #0e1530, transparent 60%),
+    radial-gradient(1000px 700px at -10% 110%, #11204a, transparent 55%),
+    linear-gradient(160deg, #0a0e1c, var(--bg));
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); background: var(--card-2); }
+
+input {
+  font: inherit;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  outline: none;
+}
+input:focus { border-color: var(--accent); }
