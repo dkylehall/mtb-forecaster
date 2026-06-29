@@ -8,7 +8,6 @@ import iconUrl from "leaflet/dist/images/marker-icon.png";
 import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
 import shadowUrl from "leaflet/dist/images/marker-shadow.png";
 import { reverseGeocode } from "../lib/geocode.js";
-import { findTrails } from "../lib/overpass.js";
 
 L.Icon.Default.mergeOptions({ iconUrl, iconRetinaUrl, shadowUrl });
 
@@ -29,11 +28,8 @@ const COLOR = {
 
 const el = ref(null);
 const baseMode = ref(localStorage.getItem("trail_map_base") || "streets");
-const trailStatus = ref("");
-const findingTrails = ref(false);
 let map = null;
 let markerLayer = null;
-let trailLayer = null;
 let dropMarker = null;
 let baseLayer = null;
 let labelLayer = null;
@@ -147,47 +143,12 @@ async function onMapClick(e) {
   dropMarker.setPopupContent(addPopupContent(place));
 }
 
-// Query OSM (Overpass) for MTB trail systems / trailheads in the current view.
-async function findTrailsInView() {
-  if (!map || findingTrails.value) return;
-  findingTrails.value = true;
-  trailStatus.value = "Searching OpenStreetMap…";
-  const b = map.getBounds();
-  try {
-    const trails = await findTrails({
-      south: b.getSouth(),
-      west: b.getWest(),
-      north: b.getNorth(),
-      east: b.getEast(),
-    });
-    trailLayer.clearLayers();
-    if (!trails.length) {
-      trailStatus.value = "No tagged MTB trails here — try zooming out.";
-      return;
-    }
-    for (const t of trails) {
-      const m = L.marker([t.lat, t.lon]);
-      m.bindTooltip(`${t.name} · ${t.kind}`, { direction: "top" });
-      m.on("click", () => {
-        m.bindPopup(addPopupContent({ name: t.name, region: t.kind, lat: t.lat, lon: t.lon })).openPopup();
-      });
-      m.addTo(trailLayer);
-    }
-    trailStatus.value = `${trails.length} trail spot${trails.length === 1 ? "" : "s"} — click a pin to add.`;
-  } catch {
-    trailStatus.value = "Trail lookup failed — try again.";
-  } finally {
-    findingTrails.value = false;
-  }
-}
-
 onMounted(() => {
   map = L.map(el.value, { zoomControl: true, attributionControl: true }).setView(
     [38.2, -78.7],
     7
   );
   setBase(baseMode.value);
-  trailLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   map.on("click", onMapClick);
   // Bias place search toward wherever the map is looking.
@@ -213,16 +174,11 @@ watch(() => props.conditions, renderMarkers, { deep: true });
 <template>
   <div class="map-panel">
     <div class="maptop">
-      <button class="find-trails" :disabled="findingTrails" @click="findTrailsInView">
-        {{ findingTrails ? "Searching…" : "⛰️ Find MTB trails in view" }}
-      </button>
+      <div class="hint">📍 Click the map to drop a pin on an exact trailhead.</div>
       <div class="base-toggle">
         <button :class="{ on: baseMode === 'streets' }" @click="setBase('streets')">Map</button>
         <button :class="{ on: baseMode === 'satellite' }" @click="setBase('satellite')">Satellite</button>
       </div>
-    </div>
-    <div class="hint">
-      {{ trailStatus || "📍 Click the map to drop a pin, or find tagged MTB trails in view." }}
     </div>
     <div ref="el" class="map"></div>
   </div>
@@ -238,9 +194,7 @@ watch(() => props.conditions, renderMarkers, { deep: true });
   height: calc(100vh - 32px);
 }
 .maptop { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 0 0 auto; }
-.find-trails { font-size: 12px; padding: 6px 11px; }
-.find-trails:disabled { opacity: 0.6; cursor: default; }
-.hint { color: var(--muted); font-size: 12px; min-height: 16px; }
+.hint { color: var(--muted); font-size: 12px; }
 .base-toggle { display: flex; gap: 0; flex: 0 0 auto; }
 .base-toggle button {
   padding: 5px 11px; font-size: 12px; border-radius: 0;

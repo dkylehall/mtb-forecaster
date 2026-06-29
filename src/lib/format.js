@@ -37,3 +37,14 @@ export function durationLabel(hours, openEnded) {
   if (openEnded) return "days";
   return humanize(hours).replace(/^~/, "");
 }
+
+// Explicit date + time, e.g. "Sat, Jun 30, 9am".
+export function dateTimeLabel(iso) {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return `${date}, ${clock(iso)}`;
+}

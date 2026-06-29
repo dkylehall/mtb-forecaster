@@ -1,5 +1,6 @@
 <script setup>
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, onMounted, watch } from "vue";
+import Sortable from "sortablejs";
 import AddArea from "./components/AddArea.vue";
 import AreaCard from "./components/AreaCard.vue";
 import MapPanel from "./components/MapPanel.vue";
@@ -24,6 +25,33 @@ const areas = ref([]);
 const conditions = reactive({});
 const selectedId = ref(null);
 const mapCenter = ref({ lat: 38.2, lon: -78.7 }); // search bias, follows the map
+const boardEl = ref(null);
+
+// Drag-to-reorder the cards (via the grip handle), persisting the new order.
+let sortable = null;
+watch(boardEl, (el) => {
+  if (sortable) {
+    sortable.destroy();
+    sortable = null;
+  }
+  if (el) {
+    sortable = Sortable.create(el, {
+      handle: ".drag-handle",
+      animation: 160,
+      onEnd: onDragEnd,
+    });
+  }
+});
+
+function onDragEnd(evt) {
+  const { oldIndex, newIndex } = evt;
+  if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
+  const arr = areas.value.slice();
+  const [moved] = arr.splice(oldIndex, 1);
+  arr.splice(newIndex, 0, moved);
+  areas.value = arr;
+  persist();
+}
 
 // How many days of past rainfall to factor into current wetness (3–7).
 const lookbackDays = ref(loadLookback());
@@ -90,8 +118,20 @@ function recomputeAll() {
   areas.value.forEach(recompute);
 }
 
-async function refreshArea(area) {
-  conditions[area.id] = { result: null, error: "", loading: true, wx: null };
+const retryTimers = {}; // id -> timeout handle
+
+function clearRetry(id) {
+  if (retryTimers[id]) {
+    clearTimeout(retryTimers[id]);
+    delete retryTimers[id];
+  }
+}
+
+async function refreshArea(area, attempt = 0) {
+  clearRetry(area.id);
+  const prev = conditions[area.id] || {};
+  // Keep showing any prior data while (re)loading.
+  conditions[area.id] = { result: prev.result || null, error: "", loading: true, wx: prev.wx || null };
   try {
     const wx = await fetchTrailWeather(area.lat, area.lon, {
       pastDays: lookbackDays.value,
@@ -99,17 +139,22 @@ async function refreshArea(area) {
     conditions[area.id] = { result: null, error: "", loading: false, wx };
     recompute(area); // fills .result using the current ideal band
   } catch (e) {
+    // Don't retry an area that's since been removed.
+    if (!areas.value.some((a) => a.id === area.id)) return;
+    // Auto-retry with backoff until the card loads (cap ~30s).
+    const delay = Math.min(30000, 2500 * Math.pow(1.6, attempt));
     conditions[area.id] = {
-      result: null,
-      error: e.message || "Couldn't load weather",
+      result: prev.result || null,
+      error: `${e.message || "Couldn't load weather"} — retrying…`,
       loading: false,
-      wx: null,
+      wx: prev.wx || null,
     };
+    retryTimers[area.id] = setTimeout(() => refreshArea(area, attempt + 1), delay);
   }
 }
 
 function refreshAll() {
-  areas.value.forEach(refreshArea);
+  areas.value.forEach((a) => refreshArea(a));
 }
 
 function onAdd(place) {
@@ -128,6 +173,7 @@ function onAdd(place) {
 }
 
 function onRemove(id) {
+  clearRetry(id);
   areas.value = removeArea(areas.value, id);
   delete conditions[id];
   persist();
@@ -214,7 +260,7 @@ onMounted(() => {
 
     <div class="layout">
       <main class="left">
-        <div v-if="areas.length" class="board">
+        <div v-if="areas.length" ref="boardEl" class="board">
           <AreaCard
             v-for="area in areas"
             :key="area.id"
@@ -299,8 +345,8 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
   align-items: start;
 }
 .board {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 14px;
 }
 .empty { color: var(--muted); }

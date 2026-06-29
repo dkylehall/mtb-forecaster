@@ -51,8 +51,51 @@ export function summarize(result, now) {
     wet: wetWindow(result, cells),
     next: nextChange(series),
     nextRain: nextRain(cells),
+    bestRide: bestRide(cells),
     days: dailyOutlook(cells),
   };
+}
+
+// The next daytime window when BOTH temperature and dryness are green (combined
+// green requires both). Returns the start/end of that contiguous green run, its
+// length, and the reason it ends (what degrades first): "temp too high/low",
+// "rain", or null if it runs to the end of the forecast. Null if they never
+// align within the horizon.
+function bestRide(cells) {
+  let start = -1;
+  for (let i = 0; i < cells.length; i++) {
+    const h = hourOf(cells[i].time);
+    if (h >= 8 && h < 18 && cells[i].condition.key === "green") {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return null;
+
+  let i = start;
+  while (i < cells.length && cells[i].condition.key === "green") i++;
+  const endIdx = i; // first non-green cell, or cells.length
+  const at = cells[start].time;
+  const end = endIdx < cells.length ? cells[endIdx].time : cells[cells.length - 1].time;
+
+  let reason = null;
+  if (endIdx < cells.length) {
+    const b = cells[endIdx];
+    const prev = cells[endIdx - 1];
+    const dryBroke = b.dry && b.dry.key !== "green";
+    const tempBroke = b.tempCond && b.tempCond.key !== "green";
+    const gotWetter = (b.precip || 0) > 0 || (b.wetness || 0) > (prev.wetness || 0);
+    if (dryBroke && gotWetter) reason = "rain";
+    else if (tempBroke) {
+      reason =
+        b.temp != null && prev.temp != null && b.temp >= prev.temp
+          ? "temp too high"
+          : "temp too low";
+    } else if (dryBroke) reason = "trail wet";
+    else reason = "weather";
+  }
+
+  return { at, end, hours: endIdx - start, reason };
 }
 
 // Next forecast rain: the first upcoming wet hour, with the total of that

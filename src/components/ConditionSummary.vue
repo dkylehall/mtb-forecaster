@@ -9,7 +9,7 @@ const props = defineProps({
   show: { type: Array, default: () => ["wet", "temp", "next"] },
 });
 
-const DRY_NOW = { green: "Dry", yellow: "Almost dry", orange: "Still wet", red: "Too wet" };
+const DRY_NOW = { green: "Dry", yellow: "Drying", orange: "Very wet", red: "Soaked" };
 const TEMP_NOW = {
   green: "comfortable",
   yellow: "a bit off",
