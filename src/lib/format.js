@@ -38,6 +38,18 @@ export function durationLabel(hours, openEnded) {
   return humanize(hours).replace(/^~/, "");
 }
 
+// Time remaining until a trail dries, e.g. "2 more hours" / "1 more hour" /
+// "3 more days". Used for the drying-time text on cards and the detail view.
+export function timeLeftLabel(hours) {
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} more min`;
+  if (hours < 36) {
+    const h = Math.round(hours);
+    return `${h} more hour${h === 1 ? "" : "s"}`;
+  }
+  const d = Math.round(hours / 24);
+  return `${d} more day${d === 1 ? "" : "s"}`;
+}
+
 // Explicit date + time, e.g. "Sat, Jun 30, 9am".
 export function dateTimeLabel(iso) {
   const d = new Date(iso);

@@ -46,6 +46,37 @@ export function conditionFor(hoursUntilDry, cutoffs = DEFAULT_DRY_CUTOFFS) {
   return TIER.red;
 }
 
+// Continuous green→red color for "hours until dry", used to show drying time as
+// a gradient instead of discrete tiers. 0h reads fully dry (green); at/after
+// SOAKED_HOURS it reads fully soaked (red), interpolating through yellow/orange.
+export const SOAKED_HOURS = 24;
+
+const GRADIENT_STOPS = [
+  [0.0, [0x5b, 0xe0, 0xa0]], // green  — dry
+  [0.34, [0xff, 0xe4, 0x5c]], // yellow
+  [0.67, [0xff, 0xb4, 0x54]], // orange
+  [1.0, [0xff, 0x6b, 0x6b]], // red    — soaked
+];
+
+// CSS color stops (left=dry … right=soaked) for the legend gradient bar.
+export const GRADIENT_CSS = GRADIENT_STOPS.map(
+  ([, [r, g, b]]) => `rgb(${r},${g},${b})`
+);
+
+export function dryingColor(hoursUntilDry, soakedHours = SOAKED_HOURS) {
+  const t = Math.max(0, Math.min(1, (hoursUntilDry || 0) / soakedHours));
+  for (let i = 1; i < GRADIENT_STOPS.length; i++) {
+    const [t0, c0] = GRADIENT_STOPS[i - 1];
+    const [t1, c1] = GRADIENT_STOPS[i];
+    if (t <= t1) {
+      const f = (t - t0) / (t1 - t0);
+      const mix = (a, b) => Math.round(a + (b - a) * f);
+      return `rgb(${mix(c0[0], c1[0])},${mix(c0[1], c1[1])},${mix(c0[2], c1[2])})`;
+    }
+  }
+  return GRADIENT_CSS[GRADIENT_CSS.length - 1];
+}
+
 // Combine two condition objects: the worse (higher severity) one wins.
 export function worse(a, b) {
   if (!a) return b;
@@ -110,13 +141,10 @@ function hoursUntilDryForward(times, precip, nowMs, startWetness, dryRate) {
   let hours = 0;
   const startIdx = indexAtOrBefore(times, nowMs);
   for (let i = startIdx + 1; i < times.length; i++) {
-    const p = precip[i] || 0;
-    if (p > 0) {
-      // Forecast rain re-wets and resets drying for that hour.
-      w += p;
-      hours += 1;
-      continue;
-    }
+    // Forecast rain just adds its water (24h of drying per inch). It does NOT
+    // also cost an extra "no-drying" hour — that would double-count. So ¼" of
+    // rain coming now simply pushes the dry time out by ¼ × 24 = 6 hours.
+    w += precip[i] || 0;
     if (w <= dryRate) {
       // Dries partway through this hour — interpolate the crossing.
       hours += w / dryRate;
@@ -159,12 +187,11 @@ function buildTimeline(
   const end = Math.min(times.length, startIdx + 1 + maxHours);
   for (let i = startIdx + 1; i < end; i++) {
     const p = precip[i] || 0;
-    if (p > 0) {
-      w += p; // rain during this hour: wetter, no drying
-    } else {
-      w -= dryRate; // drying over the hour leading up to this timestamp
-      if (w < 0) w = 0;
-    }
+    // Net water change for the hour: rain adds, drying removes (same rule the
+    // headline hours-until-dry uses, so the chart and the number agree).
+    w += p;
+    w -= dryRate;
+    if (w < 0) w = 0;
     // Hours-until-dry as of THIS hour, assuming no further rain after it.
     const hud = w / dryRate;
     const dry = conditionFor(hud, dryCutoffs);
@@ -251,6 +278,7 @@ export function computeConditions(opts) {
     wetness: round2(wetness),
     hoursUntilDry: round1(hoursUntilDry),
     dryAt,
+    dryColor: dryingColor(hoursUntilDry), // continuous green→red drying-time color
     dryCondition: dryCond,
     tempNow: tempNow == null ? null : Math.round(tempNow),
     tempCondition: tempCond,

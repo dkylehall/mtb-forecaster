@@ -7,7 +7,7 @@ import MapPanel from "./components/MapPanel.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import AreaDetailModal from "./components/AreaDetailModal.vue";
 import { fetchTrailWeather } from "./lib/weather.js";
-import { computeConditions, DEFAULT_DRY_CUTOFFS } from "./lib/drying.js";
+import { computeConditions, GRADIENT_CSS } from "./lib/drying.js";
 import { DEFAULT_IDEAL, TEMP_THRESHOLDS } from "./lib/temperature.js";
 import {
   loadAreas,
@@ -47,7 +47,6 @@ const DEFAULT_SETTINGS = {
     orange: { label: "Uncomfortable", hot: TEMP_THRESHOLDS.orange.hot, cold: TEMP_THRESHOLDS.orange.cold },
     red: { label: "No", hot: TEMP_THRESHOLDS.red.hot, cold: TEMP_THRESHOLDS.red.cold },
   },
-  dry: { drying: DEFAULT_DRY_CUTOFFS.drying, wet: DEFAULT_DRY_CUTOFFS.wet },
   maxWindows: 3,
 };
 
@@ -85,7 +84,6 @@ function loadSettings() {
       return {
         lookbackDays: lb >= 3 && lb <= 7 ? lb : DEFAULT_SETTINGS.lookbackDays,
         temp: mergeTemp(v.temp),
-        dry: { ...DEFAULT_SETTINGS.dry, ...(v.dry || {}) },
         maxWindows: mw >= 1 && mw <= 10 ? mw : DEFAULT_SETTINGS.maxWindows,
       };
     }
@@ -110,7 +108,6 @@ function resetSettings() {
   settings.lookbackDays = d.lookbackDays;
   settings.maxWindows = d.maxWindows;
   for (const k of ["green", "yellow", "orange", "red"]) Object.assign(settings.temp[k], d.temp[k]);
-  Object.assign(settings.dry, d.dry);
 }
 
 // Map settings → engine threshold shapes.
@@ -120,10 +117,6 @@ function tempThresholds() {
     orange: { hot: settings.temp.orange.hot, cold: settings.temp.orange.cold },
   };
 }
-function dryCutoffs() {
-  return { drying: settings.dry.drying, wet: settings.dry.wet };
-}
-
 // Lowercased tier labels for the detail modal's sentence text.
 const tempLabels = computed(() => ({
   green: settings.temp.green.label.toLowerCase(),
@@ -140,12 +133,8 @@ const ridingKey = computed(() => [
   { color: "var(--orange)", label: settings.temp.orange.label, note: degLabel(settings.temp.orange.hot, settings.temp.orange.cold) },
   { color: "var(--red)", label: settings.temp.red.label, note: degLabel(settings.temp.red.hot, settings.temp.red.cold) },
 ]);
-const trailKey = computed(() => [
-  { color: "var(--green)", label: "Dry", note: "rideable" },
-  { color: "var(--yellow)", label: "Drying", note: `≤${settings.dry.drying}h to dry` },
-  { color: "var(--orange)", label: "Very wet", note: `${settings.dry.drying}–${settings.dry.wet}h to dry` },
-  { color: "var(--red)", label: "Soaked", note: `>${settings.dry.wet}h to dry` },
-]);
+// Trail dryness is shown as a continuous drying-time gradient (dry → soaked).
+const gradientCss = `linear-gradient(90deg, ${GRADIENT_CSS.join(", ")})`;
 
 // React to settings changes: lookback needs a refetch; temp/dry only recompute.
 watch(() => settings.lookbackDays, () => {
@@ -153,7 +142,7 @@ watch(() => settings.lookbackDays, () => {
   refreshAll();
 });
 watch(
-  () => [settings.temp, settings.dry],
+  () => settings.temp,
   () => {
     persistSettings();
     recomputeAll();
@@ -276,7 +265,6 @@ function recompute(area) {
     drainage: area.drainage,
     idealTempMin: ideal.min,
     idealTempMax: ideal.max,
-    dryCutoffs: dryCutoffs(),
     tempThresholds: tempThresholds(),
     daily: c.wx.daily,
   });
@@ -366,7 +354,6 @@ onMounted(() => {
         <p class="tag">Dry enough &amp; warm enough to ride? From recent &amp; forecast weather.</p>
       </div>
       <div class="controls">
-        <AddArea :bias="mapCenter" @add="onAdd" />
         <button class="refresh" title="Refresh all" @click="refreshAll">↻</button>
         <button class="refresh" title="Settings" @click="showSettings = true">⚙</button>
       </div>
@@ -409,17 +396,17 @@ onMounted(() => {
       </div>
       <div class="key-row">
         <span class="key-title">Trail conditions</span>
-        <span v-for="t in trailKey" :key="t.label" class="k">
-          <i class="sw" :style="{ background: t.color }"></i>
-          {{ t.label }} <small v-if="t.note">({{ t.note }})</small>
-        </span>
+        <span class="k">Dry</span>
+        <span class="grad-bar" :style="{ background: gradientCss }"></span>
+        <span class="k">Soaked</span>
       </div>
     </div>
 
     <div class="layout">
       <main class="left">
-        <div v-if="areas.length" class="board-tools">
-          <label class="sort">
+        <div class="board-head">
+          <AddArea class="board-search" :bias="mapCenter" @add="onAdd" />
+          <label v-if="areas.length" class="sort">
             Sort
             <select v-model="sortBy">
               <option value="custom">Drag order</option>
@@ -464,6 +451,7 @@ onMounted(() => {
     <SettingsModal
       v-if="showSettings"
       :settings="settings"
+      :ideal="ideal"
       @reset="resetSettings"
       @close="showSettings = false"
     />
@@ -522,15 +510,20 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
   margin-bottom: 16px; padding: 10px 14px;
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
 }
-.key-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.key-row { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; }
 .key-title {
   flex: 0 0 116px;
   text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px;
   color: var(--muted); font-weight: 650;
 }
-.k { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.k { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; white-space: nowrap; }
 .k small { color: var(--muted); }
 .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: 0 0 auto; }
+/* Trail dryness legend: a continuous green→red drying-time gradient. */
+.grad-bar {
+  flex: 1 1 auto; max-width: 360px; height: 10px; border-radius: 5px;
+  border: 1px solid var(--line);
+}
 
 .layout {
   display: grid;
@@ -547,8 +540,11 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
   display: flex;
   flex-direction: column;
 }
-.board-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex: 0 0 auto; }
-.board-tools button { font-size: 12px; padding: 5px 11px; }
+.board-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 12px; flex: 0 0 auto;
+}
+.board-search { flex: 1 1 auto; min-width: 0; }
 .sort {
   margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);

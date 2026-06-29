@@ -4,6 +4,9 @@
 // watchers pick up changes and persist/recompute.
 const props = defineProps({
   settings: { type: Object, required: true },
+  // The ideal riding band (min/max °F) set on the main page. The green tier IS
+  // this band, so we display it read-only here rather than letting it be edited.
+  ideal: { type: Object, required: true },
 });
 const emit = defineEmits(["close", "reset"]);
 
@@ -54,7 +57,10 @@ function normalizeTemp() {
           <div class="trow">
             <i class="sw" style="background: var(--green)"></i>
             <input class="tlabel" v-model="settings.temp.green.label" />
-            <span class="tband">your ideal band (set on the main page)</span>
+            <label class="tval"><input type="number" :value="ideal.min" disabled />°</label>
+            <span class="tdash">–</span>
+            <label class="tval"><input type="number" :value="ideal.max" disabled />°</label>
+            <span class="tband">set on the main page</span>
           </div>
           <div class="trow" v-for="k in ['yellow', 'orange', 'red']" :key="k">
             <i class="sw" :style="{ background: 'var(--' + k + ')' }"></i>
@@ -63,22 +69,6 @@ function normalizeTemp() {
             <label class="tval">−<input type="number" min="0" max="80" v-model.number="settings.temp[k].cold" @change="normalizeTemp" />°</label>
           </div>
         </div>
-      </section>
-
-      <!-- Trail (dry-time) windows -->
-      <section class="group">
-        <h3>Trail conditions — dry-time windows</h3>
-        <p class="hint">Hours until a trail is dry that separate each tier.</p>
-        <div class="grid">
-          <span class="lbl"><i class="sw" style="background: var(--yellow)"></i> Drying up to</span>
-          <label><input type="number" min="1" max="240" v-model.number="settings.dry.drying" /> h</label>
-          <span></span>
-
-          <span class="lbl"><i class="sw" style="background: var(--orange)"></i> Very wet up to</span>
-          <label><input type="number" min="1" max="240" v-model.number="settings.dry.wet" /> h</label>
-          <span></span>
-        </div>
-        <p class="note">Beyond Very wet reads <span style="color: var(--red)">Soaked</span>.</p>
       </section>
 
       <footer class="p-foot">
@@ -145,6 +135,12 @@ function normalizeTemp() {
   width: 50px; padding: 4px 6px; font-size: 13px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
+/* Green tier is the ideal band — shown read-only, but visually like the rest. */
+.tval input[type="number"]:disabled {
+  color: var(--text); opacity: 1; cursor: default;
+  background: var(--card-2); border-color: var(--line);
+}
+.tdash { color: var(--muted); font-size: 13px; }
 
 .p-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; }
 .reset { background: transparent; color: var(--muted); }

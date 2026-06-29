@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from "vue";
+import { timeLeftLabel } from "../lib/format.js";
 
 const props = defineProps({
   area: { type: Object, required: true },
@@ -9,7 +10,15 @@ const props = defineProps({
 });
 const emit = defineEmits(["remove", "open"]);
 
-const TRAIL_LABEL = { green: "Dry", yellow: "Drying", orange: "Very wet", red: "Soaked" };
+// Trail dryness shown as drying time: "Dry" (green) when ready, otherwise
+// "drying for N more hours" tinted by the green→red gradient color.
+const isDry = computed(() => !props.result || props.result.hoursUntilDry <= 0);
+const wetText = computed(() =>
+  isDry.value ? "Dry" : `drying for ${timeLeftLabel(props.result.hoursUntilDry)}`
+);
+const wetColor = computed(() =>
+  isDry.value ? "var(--green)" : props.result.dryColor
+);
 
 // The dot shows overall go/no-go (combined temp + trail).
 const statusColor = computed(() =>
@@ -35,9 +44,7 @@ const curTemp = computed(() => {
 
     <div v-if="result" class="quick">
       <span class="q-temp" :style="{ color: tempColor }">{{ curTemp != null ? curTemp + "°" : "—" }}</span>
-      <span class="q-wet" :style="{ color: result.dryCondition.color }">
-        {{ TRAIL_LABEL[result.dryCondition.key] }}
-      </span>
+      <span class="q-wet" :style="{ color: wetColor }">{{ wetText }}</span>
     </div>
     <div v-else-if="error" class="quick muted">retrying…</div>
     <div v-else class="quick muted">Loading…</div>

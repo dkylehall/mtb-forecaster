@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import ConditionSummary from "./ConditionSummary.vue";
 import { summarize } from "../lib/summary.js";
-import { whenLabel, clock } from "../lib/format.js";
+import { whenLabel, clock, timeLeftLabel } from "../lib/format.js";
 
 const props = defineProps({
   area: { type: Object, required: true },
@@ -17,7 +17,17 @@ const props = defineProps({
 });
 const emit = defineEmits(["close"]);
 
-const TRAIL_LABEL = { green: "Dry", yellow: "Drying", orange: "Very wet", red: "Soaked" };
+// Trail dryness as drying time (continuous gradient), matching the cards.
+const isDry = computed(() => !props.result || props.result.hoursUntilDry <= 0);
+const wetText = computed(() =>
+  isDry.value ? "Dry" : `Drying for ${timeLeftLabel(props.result.hoursUntilDry)}`
+);
+const wetColor = computed(() =>
+  isDry.value ? "var(--green)" : props.result.dryColor
+);
+const dryByText = computed(() =>
+  props.result && props.result.dryAt ? `Dry by ${whenLabel(props.result.dryAt)}` : null
+);
 
 const summary = computed(() =>
   props.result ? summarize(props.result, new Date(), props.maxWindows) : null
@@ -121,10 +131,9 @@ function barHeight(temp) {
         <section class="block trail">
           <h3>Trail conditions</h3>
           <div class="trail-row">
-            <span class="trail-status" :style="{ color: result.dryCondition.color }">
-              {{ TRAIL_LABEL[result.dryCondition.key] }}
-            </span>
+            <span class="trail-status" :style="{ color: wetColor }">{{ wetText }}</span>
             <span class="metrics">
+              <span v-if="dryByText">{{ dryByText }}</span>
               <span>Recent {{ result.recentRainIn }}"</span>
               <span>Next rain: {{ nextRainText }}</span>
             </span>
@@ -140,9 +149,10 @@ function barHeight(temp) {
               <div class="w-text">{{ windowText(w) }}</div>
               <div v-if="w.bars && w.bars.length" class="w-bars">
                 <div v-for="(b, bi) in w.bars" :key="bi" class="w-bar">
-                  <span class="w-temp">{{ b.temp != null ? b.temp + "°" : "—" }}</span>
                   <span class="w-track">
-                    <span class="w-fill" :style="{ height: barHeight(b.temp), background: tierColor(b.tier) }"></span>
+                    <span class="w-fill" :style="{ height: barHeight(b.temp), background: tierColor(b.tier) }">
+                      <span class="w-temp">{{ b.temp != null ? b.temp + "°" : "—" }}</span>
+                    </span>
                   </span>
                   <span class="w-time">{{ clock(b.time) }}</span>
                 </div>
@@ -201,9 +211,13 @@ function barHeight(temp) {
 
 .w-bars { display: flex; gap: 4px; align-items: flex-end; }
 .w-bar { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.w-temp { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.w-track { width: 100%; height: 52px; display: flex; align-items: flex-end; }
-.w-fill { width: 100%; border-radius: 3px 3px 0 0; min-height: 3px; }
+.w-track { width: 100%; height: 56px; display: flex; align-items: flex-end; }
+.w-fill { position: relative; width: 100%; border-radius: 4px 4px 0 0; min-height: 16px; }
+.w-temp {
+  position: absolute; top: 2px; left: 0; right: 0; text-align: center;
+  font-size: 10px; font-weight: 700; color: #0b1020;
+  font-variant-numeric: tabular-nums;
+}
 .w-time { font-size: 9px; color: var(--muted); white-space: nowrap; }
 
 .block { display: flex; flex-direction: column; gap: 6px; }

@@ -128,6 +128,27 @@ describe("drainage presets", () => {
 // ---- forecast rain re-wets ----------------------------------------------
 
 describe("forecast rain", () => {
+  it("adds 6 hours of drying for a fresh 0.25\" (24h per inch)", () => {
+    // 1" fell 12h ago → 12h left to dry. Another 0.25" arrives right now: that
+    // should push the dry time out by 0.25 × 24 = 6h, to ~18h (NOT 19h — the
+    // rain hour itself must not be double-counted).
+    const start = "2026-06-01T00:00:00Z";
+    const times = hours(start, 72);
+    const nowOffset = 24;
+    const precip = precipAt(72, [[nowOffset - 12, 1.0], [nowOffset + 1, 0.25]]);
+    const r = computeConditions({ times, precip, now: times[nowOffset] });
+    expect(r.hoursUntilDry).toBeCloseTo(18, 0);
+  });
+
+  it("leaves ~12h when 1\" fell 12h ago and no more is coming", () => {
+    const start = "2026-06-01T00:00:00Z";
+    const times = hours(start, 72);
+    const nowOffset = 24;
+    const precip = precipAt(72, [[nowOffset - 12, 1.0]]);
+    const r = computeConditions({ times, precip, now: times[nowOffset] });
+    expect(r.hoursUntilDry).toBeCloseTo(12, 1);
+  });
+
   it("pushes the dry time out when more rain is coming", () => {
     // Dry now, but 1.0" arrives a few hours from now.
     const start = "2026-06-01T00:00:00Z";
