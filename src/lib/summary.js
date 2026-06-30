@@ -93,12 +93,11 @@ function rideWindows(cells, sun, maxWindows = 3) {
       let q = p;
       while (q + 1 < dayIdx.length && cells[dayIdx[q + 1]].condition.key === "green") q++;
 
-      // "At sunrise" only if this is the day's first stretch AND the first
-      // daylight cell really is near sunrise (today's window starts at the
-      // current time, not this morning's sunrise).
+      // Start at the whole hour of the first green cell — the hour containing
+      // sunrise is included; the exact sunrise is marked on the chart instead.
       const startAtSunrise =
         p === 0 && timeOfDay(cells[dayIdx[0]].time) <= Math.floor(srH) + 1;
-      const atIso = startAtSunrise ? s.sunrise : cells[dayIdx[p]].time;
+      const atIso = cells[dayIdx[p]].time;
 
       let endIso, reason, temp = null;
       if (q === dayIdx.length - 1) {
@@ -114,17 +113,13 @@ function rideWindows(cells, sun, maxWindows = 3) {
 
       const hours = Math.max(1, Math.round(timeOfDay(endIso) - timeOfDay(atIso)));
 
-      // Hourly temperature bars: rideable hours + 2 of wiggle room, each colored
-      // by its temperature tier — but never past sunset (the hard cutoff).
+      // Hourly bars = just the window's green hours (no padding), each colored
+      // by its temperature tier.
       const bars = [];
-      const barCount = Math.min(hours + 2, 12);
-      for (let k = 0; k < barCount; k++) {
-        const ci = dayIdx[p] + k;
-        if (ci >= cells.length) break;
-        const c = cells[ci];
-        if (dateKey(c.time) !== day || timeOfDay(c.time) > ssH) break;
+      for (let k = p; k <= q; k++) {
+        const c = cells[dayIdx[k]];
         bars.push({
-          time: k === 0 ? atIso : c.time,
+          time: c.time,
           temp: c.temp,
           tier: c.tempCond ? c.tempCond.key : "green",
           feels: c.feels,
@@ -135,7 +130,10 @@ function rideWindows(cells, sun, maxWindows = 3) {
         });
       }
 
-      windows.push({ at: atIso, startAtSunrise, end: endIso, hours, reason, temp, bars });
+      windows.push({
+        at: atIso, startAtSunrise, end: endIso, hours, reason, temp, bars,
+        sunrise: s.sunrise, sunset: s.sunset,
+      });
       i = q + 1; // continue scanning for the next stretch this same day
     }
   }

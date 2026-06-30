@@ -59,28 +59,25 @@ function dayLabel(iso) {
   const md = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return `${wd} ${md}`;
 }
-function durationPhrase(hours) {
-  if (hours >= 24) {
-    const d = Math.round(hours / 24);
-    return `${d} day${d === 1 ? "" : "s"}`;
-  }
-  return `${hours} hour${hours === 1 ? "" : "s"}`;
-}
+// Why the window closes, in plain words. Sunset = ran out of daylight.
+const REASON_TEXT = {
+  heat: "too hot", cold: "too cold", rain: "too wet", wet: "too wet", sunset: "sundown",
+};
 function reasonText(w) {
   if (!w.reason) return "";
-  if ((w.reason === "heat" || w.reason === "cold") && w.temp != null) {
-    return `${w.reason} - ${Math.round(w.temp)}°`;
-  }
-  if (w.reason === "sunset") return `sunset ${clock(w.end)}`;
-  return w.reason;
+  return REASON_TEXT[w.reason] || w.reason;
 }
 
 const rideWindows = computed(() => summary.value?.rideWindows || []);
 function windowText(w) {
-  const start = w.startAtSunrise
-    ? `${dayLabel(w.at)} @ sunrise (${clock(w.at)})`
-    : `${dayLabel(w.at)} @ ${clock(w.at)}`;
-  return `${start} for ${durationPhrase(w.hours)} (${reasonText(w)})`;
+  const bars = w.bars || [];
+  const a = bars.length ? bars[0].time : w.at;
+  const b = bars.length ? bars[bars.length - 1].time : w.end;
+  const start = clock(a);
+  const end = clock(b);
+  const range = start === end ? start : `${start}–${end}`;
+  const r = reasonText(w);
+  return `${dayLabel(w.at)} · ${range}${r ? ` [${r}]` : ""}`;
 }
 
 // Concrete hex per tier (SVG gradient stops won't take CSS vars reliably).
@@ -170,8 +167,33 @@ function chartFor(bars, idx) {
   };
 }
 
+// Hour-of-day from an ISO string (TZ-agnostic), e.g. "…T05:28" → 5.47.
+function hourOf(iso) {
+  return Number(iso.slice(11, 13)) + Number(iso.slice(14, 16)) / 60;
+}
+// X position (0–100) for a sunrise/sunset marker within a window's bars, or
+// null if it falls outside the charted span.
+function markerX(iso, bars) {
+  if (!iso || !bars || bars.length < 2) return null;
+  const t0 = hourOf(bars[0].time);
+  const t1 = hourOf(bars[bars.length - 1].time);
+  if (t1 <= t0) return null;
+  const t = hourOf(iso);
+  // Each bar represents its whole hour, so allow a marker up to ~1h past the
+  // last bar (and a touch before the first); clamp its position to the edge.
+  if (t < t0 - 0.5 || t > t1 + 1) return null;
+  const frac = (t - t0) / (t1 - t0);
+  return Math.max(0, Math.min(1, frac)) * 100;
+}
+
 const windowCharts = computed(() =>
-  rideWindows.value.map((w, i) => (w.bars && w.bars.length ? chartFor(w.bars, i) : null))
+  rideWindows.value.map((w, i) => {
+    if (!w.bars || !w.bars.length) return null;
+    const c = chartFor(w.bars, i);
+    c.srX = markerX(w.sunrise, w.bars);
+    c.ssX = markerX(w.sunset, w.bars);
+    return c;
+  })
 );
 const hasAnyFeels = computed(() => windowCharts.value.some((c) => c && c.feels));
 
@@ -257,6 +279,7 @@ const showFeels = ref(true);
                     > ({{ b.feels }}°)</small></template><template
                     v-else-if="showFeels">{{ b.feels != null ? b.feels + "°" : "—" }}</template></span>
                 </div>
+                <div class="w-spark-wrap">
                 <svg class="w-spark" viewBox="0 0 100 46" preserveAspectRatio="none" aria-hidden="true">
                   <defs>
                     <linearGradient :id="windowCharts[i].gradId" x1="0" y1="0" x2="1" y2="0">
@@ -304,7 +327,32 @@ const showFeels = ref(true);
                     stroke-linejoin="round"
                     vector-effect="non-scaling-stroke"
                   />
+                  <line
+                    v-if="windowCharts[i].srX != null"
+                    class="sun-line"
+                    :x1="windowCharts[i].srX" y1="1" :x2="windowCharts[i].srX" y2="45"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <line
+                    v-if="windowCharts[i].ssX != null"
+                    class="sun-line sunset"
+                    :x1="windowCharts[i].ssX" y1="1" :x2="windowCharts[i].ssX" y2="45"
+                    vector-effect="non-scaling-stroke"
+                  />
                 </svg>
+                <span
+                  v-if="windowCharts[i].srX != null"
+                  class="sun-mark"
+                  :style="{ left: windowCharts[i].srX + '%' }"
+                  title="Sunrise"
+                >🌅</span>
+                <span
+                  v-if="windowCharts[i].ssX != null"
+                  class="sun-mark"
+                  :style="{ left: windowCharts[i].ssX + '%' }"
+                  title="Sunset"
+                >🌇</span>
+                </div>
                 <div class="w-times">
                   <span v-for="(b, bi) in w.bars" :key="bi" class="w-time">
                     <span v-if="b.code != null" class="w-ico" :title="skyLabel(b.code)">{{ skyEmoji(b.code) }}</span>
@@ -381,7 +429,14 @@ const showFeels = ref(true);
   font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
 .w-feels { font-size: 9px; font-weight: 600; }
+.w-spark-wrap { position: relative; }
 .w-spark { width: 100%; height: 46px; display: block; overflow: visible; }
+.sun-line { stroke: #ffce7a; stroke-width: 1.3; stroke-dasharray: 2 2; opacity: 0.7; }
+.sun-line.sunset { stroke: #ff9e7a; }
+.sun-mark {
+  position: absolute; top: -1px; transform: translateX(-50%);
+  font-size: 10px; line-height: 1; pointer-events: none;
+}
 .w-time {
   flex: 1 1 0; min-width: 0;
   display: flex; flex-direction: column; align-items: center; gap: 1px;
