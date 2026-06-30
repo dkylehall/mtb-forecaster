@@ -456,7 +456,7 @@ onUnmounted(() => {
     <header>
       <div class="title">
         <h1>🚵 MTB Ride Forecaster</h1>
-        <p class="tag">Dry enough &amp; warm enough to ride? From recent &amp; forecast weather.</p>
+        <p class="tag">Find your ideal times to ride based on recent &amp; forecast weather and trail conditions.</p>
       </div>
       <div class="controls">
         <button class="refresh" title="Refresh all" @click="refreshAll">↻</button>
@@ -663,7 +663,7 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
 }
 .key-row { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; }
 .key-title {
-  flex: 0 0 116px;
+  flex: 0 0 140px; white-space: nowrap;
   text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px;
   color: var(--muted); font-weight: 650;
 }

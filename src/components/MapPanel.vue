@@ -275,16 +275,30 @@ function locateMe() {
   );
 }
 
+// Trackpad pinch (ctrl+wheel): zoom toward the pointer, clamped to the map's range.
+function onPinchZoom(e) {
+  if (!map || !e.ctrlKey) return;
+  e.preventDefault();
+  const pt = map.mouseEventToContainerPoint(e);
+  const target = map.getZoom() - e.deltaY * 0.01;
+  const z = Math.max(MAP_MIN_ZOOM, Math.min(MAP_MAX_ZOOM, target));
+  map.setZoomAround(map.containerPointToLatLng(pt), z, { animate: false });
+}
+
 onMounted(() => {
   map = L.map(el.value, {
     zoomControl: true, // the +/- buttons
     attributionControl: true,
     minZoom: MAP_MIN_ZOOM,
     maxZoom: MAP_MAX_ZOOM,
-    scrollWheelZoom: false, // don't zoom while scrolling the page
-    doubleClickZoom: false, // only the +/- buttons zoom
+    scrollWheelZoom: false, // plain scroll pans the page, not the map…
+    doubleClickZoom: true, // …but double-click zooms in
+    touchZoom: true, // two-finger pinch on touchscreens
     boxZoom: false,
   }).setView([38.2, -78.7], 7);
+  // Trackpad pinch arrives as ctrl+wheel — zoom toward the cursor on that only,
+  // so ordinary scrolling still moves the page rather than the map.
+  el.value.addEventListener("wheel", onPinchZoom, { passive: false });
   setBase(baseMode.value);
   markerLayer = L.layerGroup().addTo(map);
   // Bias place search toward wherever the map is looking.
@@ -303,6 +317,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (radarTimer) clearInterval(radarTimer);
   stopRadarAnim();
+  if (el.value) el.value.removeEventListener("wheel", onPinchZoom);
   if (map) map.remove();
   map = null;
 });
