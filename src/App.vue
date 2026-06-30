@@ -1,6 +1,5 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, watch, computed } from "vue";
-import Sortable from "sortablejs";
 import AddArea from "./components/AddArea.vue";
 import AreaCard from "./components/AreaCard.vue";
 import MapPanel from "./components/MapPanel.vue";
@@ -25,7 +24,6 @@ const areas = ref([]);
 // id -> { result, error, loading }
 const conditions = reactive({});
 const mapCenter = ref({ lat: 38.2, lon: -78.7 }); // search bias, follows the map
-const boardEl = ref(null);
 const showSettings = ref(false);
 
 // Which area's detail modal is open (id, or null).
@@ -174,51 +172,21 @@ watch(() => settings.refreshMinutes, () => {
   restartAutoRefresh();
 });
 
-// Drag-to-reorder the cards (via the grip handle), persisting the new order.
-let sortable = null;
-watch(boardEl, (el) => {
-  if (sortable) {
-    sortable.destroy();
-    sortable = null;
-  }
-  if (el) {
-    sortable = Sortable.create(el, {
-      // Whole card is draggable; clicks and the listed controls still work
-      // (Sortable only reorders on an actual drag movement).
-      draggable: ".area-card",
-      filter: "button, select, input, a, .leaflet-container",
-      preventOnFilter: false,
-      animation: 160,
-      disabled: sortBy.value !== "custom", // drag only in manual order
-      onEnd: onDragEnd,
-    });
-  }
-});
-
-function onDragEnd(evt) {
-  const { oldIndex, newIndex } = evt;
-  if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-  const arr = areas.value.slice();
-  const [moved] = arr.splice(oldIndex, 1);
-  arr.splice(newIndex, 0, moved);
-  areas.value = arr;
-  persist();
-}
-
-// Sort control: drag order (manual), name, best conditions, or nearest.
+// Sort control: name, best conditions, or nearest.
 const SORT_KEY = "mtb_sort";
-const sortBy = ref(localStorage.getItem(SORT_KEY) || "custom");
+const VALID_SORTS = ["name", "conditions", "nearest"];
+const storedSort = localStorage.getItem(SORT_KEY);
+const sortBy = ref(VALID_SORTS.includes(storedSort) ? storedSort : "conditions");
 watch(sortBy, (v, old) => {
   try {
     localStorage.setItem(SORT_KEY, v);
   } catch {
     /* ignore */
   }
-  if (sortable) sortable.option("disabled", v !== "custom");
   // "Nearest" needs the user's location; request it (revert if denied).
   if (v === "nearest") {
     requestLocation(() => {
-      sortBy.value = old && old !== "nearest" ? old : "custom";
+      sortBy.value = old && old !== "nearest" ? old : "conditions";
       alert("Couldn't get your location. Allow location access to sort by distance.");
     });
   }
@@ -289,7 +257,7 @@ const displayedAreas = computed(() => {
     if (!loc) return list; // no fix yet — keep current order until it resolves
     return [...list].sort((a, b) => distanceMiles(loc, a) - distanceMiles(loc, b));
   }
-  return list; // custom / drag order
+  return list; // insertion order (fallback)
 });
 
 // Ideal riding temperature band (°F).
@@ -421,7 +389,7 @@ onMounted(() => {
   // kick off the location request here (silently revert if it's denied).
   if (sortBy.value === "nearest") {
     requestLocation(() => {
-      sortBy.value = "custom";
+      sortBy.value = "conditions";
     });
   }
 });
@@ -435,7 +403,7 @@ onUnmounted(() => {
   <div class="wrap">
     <header>
       <div class="title">
-        <h1>🚵 Trail Conditions</h1>
+        <h1>🚵 MTB Ride Forecaster</h1>
         <p class="tag">Dry enough &amp; warm enough to ride? From recent &amp; forecast weather.</p>
       </div>
       <div class="controls">
@@ -494,14 +462,13 @@ onUnmounted(() => {
           <label v-if="areas.length" class="sort">
             Sort
             <select v-model="sortBy">
-              <option value="custom">Drag order</option>
               <option value="name">Name A–Z</option>
               <option value="conditions">Best conditions</option>
               <option value="nearest">Nearest</option>
             </select>
           </label>
         </div>
-        <div v-if="areas.length" ref="boardEl" class="board">
+        <div v-if="areas.length" class="board">
           <AreaCard
             v-for="area in displayedAreas"
             :key="area.id"
