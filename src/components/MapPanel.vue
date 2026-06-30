@@ -38,8 +38,22 @@ let map = null;
 let markerLayer = null;
 let baseLayer = null;
 let labelLayer = null;
-let radarLayer = null;
-let radarTimer = null;
+let radarTimer = null; // periodic re-fetch of the frame list
+
+// Animated radar: RainViewer serves ~13 recent frames + short nowcast. We load
+// them all (one tile layer each, opacity-toggled) and cycle through for a loop.
+const RADAR_OPACITY = 0.65;
+const RADAR_FRAME_MS = 500; // per-frame dwell while playing
+const RADAR_LOOP_PAUSE_MS = 1200; // hold on the newest frame before looping
+let radarFrames = [];
+let radarHost = "";
+const radarLayers = {}; // frame index -> L.tileLayer (added to map, opacity 0/0.65)
+let radarAnimTimer = null;
+const radarIdx = ref(0);
+const radarPlaying = ref(true);
+const radarTime = ref("");
+const radarCount = ref(0); // frame count, for the scrubber's range
+let youMarker = null; // "you are here" dot from the locate button
 
 // Light, labeled base maps make trailheads easy to spot; satellite shows the
 // actual terrain/clearings.
@@ -110,7 +124,76 @@ function renderMarkers() {
   }
 }
 
-// RainViewer precipitation radar (free, no key). Loads the latest frame.
+// Get (creating + caching) the tile layer for frame `i`, added to the map at
+// opacity 0 so it preloads without showing.
+function frameLayer(i) {
+  if (radarLayers[i]) return radarLayers[i];
+  const f = radarFrames[i];
+  const url = `${radarHost}${f.path}/256/{z}/{x}/{y}/4/1_1.png`;
+  const layer = L.tileLayer(url, {
+    opacity: 0,
+    maxNativeZoom: RADAR_NATIVE_MAX, // upscale past z7 instead of fetching the placeholder
+    maxZoom: MAP_MAX_ZOOM,
+    errorTileUrl: BLANK_TILE,
+    zIndex: 5,
+  });
+  radarLayers[i] = layer;
+  if (map) layer.addTo(map);
+  return layer;
+}
+
+// Show frame `i`: reveal it, hide the rest. Updates the timestamp label.
+function showFrame(i) {
+  if (!radarFrames.length) return;
+  radarIdx.value = ((i % radarFrames.length) + radarFrames.length) % radarFrames.length;
+  frameLayer(radarIdx.value);
+  for (const k in radarLayers) {
+    radarLayers[k].setOpacity(Number(k) === radarIdx.value ? RADAR_OPACITY : 0);
+  }
+  const t = radarFrames[radarIdx.value].time;
+  radarTime.value = t
+    ? new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : "";
+}
+
+// Recursive timer so we can dwell longer on the newest frame each loop.
+function startRadarAnim() {
+  stopRadarAnim();
+  if (!radarOn.value || !radarPlaying.value || radarFrames.length < 2) return;
+  const tick = () => {
+    const next = radarIdx.value >= radarFrames.length - 1 ? 0 : radarIdx.value + 1;
+    showFrame(next);
+    const onNewest = radarIdx.value >= radarFrames.length - 1;
+    radarAnimTimer = setTimeout(tick, onNewest ? RADAR_LOOP_PAUSE_MS : RADAR_FRAME_MS);
+  };
+  radarAnimTimer = setTimeout(tick, RADAR_FRAME_MS);
+}
+
+function stopRadarAnim() {
+  if (radarAnimTimer) {
+    clearTimeout(radarAnimTimer);
+    radarAnimTimer = null;
+  }
+}
+
+function clearRadarLayers() {
+  stopRadarAnim();
+  for (const k in radarLayers) {
+    if (map) map.removeLayer(radarLayers[k]);
+    delete radarLayers[k];
+  }
+  radarCount.value = 0;
+}
+
+// Scrubbing the timeline pauses the loop and jumps to the chosen frame.
+function onScrub(e) {
+  radarPlaying.value = false;
+  stopRadarAnim();
+  showFrame(Number(e.target.value));
+}
+
+// RainViewer precipitation radar (free, no key). Loads the full frame list and
+// preloads every frame so the animation loops smoothly.
 async function loadRadar() {
   if (!map) return;
   try {
@@ -119,20 +202,15 @@ async function loadRadar() {
     let frames = j.radar && j.radar.past ? j.radar.past.slice() : [];
     if (j.radar && j.radar.nowcast) frames = frames.concat(j.radar.nowcast);
     if (!frames.length) return;
-    const latest = frames[frames.length - 1];
-    const host = j.host || "https://tilecache.rainviewer.com";
-    const url = `${host}${latest.path}/256/{z}/{x}/{y}/4/1_1.png`;
-    if (radarLayer) {
-      map.removeLayer(radarLayer);
-      radarLayer = null;
+    radarHost = j.host || "https://tilecache.rainviewer.com";
+    clearRadarLayers(); // drop stale frames before swapping in the fresh list
+    radarFrames = frames;
+    radarCount.value = frames.length;
+    if (radarOn.value) {
+      radarFrames.forEach((_, i) => frameLayer(i)); // preload all frames
+      showFrame(radarFrames.length - 1); // rest on the newest
+      startRadarAnim();
     }
-    radarLayer = L.tileLayer(url, {
-      opacity: 0.65,
-      maxNativeZoom: RADAR_NATIVE_MAX, // upscale past z7 instead of fetching the placeholder
-      maxZoom: MAP_MAX_ZOOM,
-      errorTileUrl: BLANK_TILE,
-    });
-    if (radarOn.value) radarLayer.addTo(map);
   } catch {
     /* offline / blocked — just skip radar */
   }
@@ -145,12 +223,56 @@ function toggleRadar() {
   } catch {
     /* ignore */
   }
-  if (!radarLayer) {
-    if (radarOn.value) loadRadar();
+  if (radarOn.value) {
+    if (!radarFrames.length) {
+      loadRadar();
+      return;
+    }
+    radarCount.value = radarFrames.length;
+    radarFrames.forEach((_, i) => frameLayer(i));
+    showFrame(radarFrames.length - 1);
+    startRadarAnim();
+  } else {
+    clearRadarLayers();
+  }
+}
+
+function toggleRadarPlay() {
+  radarPlaying.value = !radarPlaying.value;
+  if (radarPlaying.value) startRadarAnim();
+  else stopRadarAnim();
+}
+
+// Center the map on the user's GPS location and drop a "you are here" dot.
+const locating = ref(false);
+function locateMe() {
+  if (!map) return;
+  if (!navigator.geolocation) {
+    alert("Location isn't available in this browser.");
     return;
   }
-  if (radarOn.value) radarLayer.addTo(map);
-  else map.removeLayer(radarLayer);
+  locating.value = true;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      locating.value = false;
+      const ll = [pos.coords.latitude, pos.coords.longitude];
+      map.setView(ll, Math.max(map.getZoom(), 10), { animate: true });
+      if (youMarker) map.removeLayer(youMarker);
+      youMarker = L.circleMarker(ll, {
+        radius: 6,
+        color: "#fff",
+        weight: 2,
+        fillColor: "#3b82f6",
+        fillOpacity: 1,
+      }).addTo(map);
+      youMarker.bindTooltip("You are here", { direction: "top", offset: [0, -6] });
+    },
+    () => {
+      locating.value = false;
+      alert("Couldn't get your location. Allow location access to use this.");
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+  );
 }
 
 onMounted(() => {
@@ -180,6 +302,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (radarTimer) clearInterval(radarTimer);
+  stopRadarAnim();
   if (map) map.remove();
   map = null;
 });
@@ -200,6 +323,7 @@ defineExpose({
     <div class="maptop">
       <div class="hint">Tap a dot to jump to its card.</div>
       <div class="map-ctrls">
+        <button class="ctrl" :class="{ on: locating }" title="Center on my location" @click="locateMe">📍</button>
         <button class="ctrl" :class="{ on: radarOn }" @click="toggleRadar">🌧️ Radar</button>
         <div class="base-toggle">
           <button :class="{ on: baseMode === 'streets' }" @click="setBase('streets')">Map</button>
@@ -208,6 +332,26 @@ defineExpose({
       </div>
     </div>
     <div ref="el" class="map"></div>
+    <div v-if="radarOn" class="radar-bar">
+      <button
+        class="radar-play"
+        :title="radarPlaying ? 'Pause radar loop' : 'Play radar loop'"
+        @click="toggleRadarPlay"
+      >
+        {{ radarPlaying ? "⏸" : "▶" }}
+      </button>
+      <span v-if="radarTime" class="radar-time">{{ radarTime }}</span>
+      <input
+        class="radar-scrub"
+        type="range"
+        min="0"
+        :max="Math.max(0, radarCount - 1)"
+        :value="radarIdx"
+        :disabled="radarCount < 2"
+        title="Scrub radar timeline"
+        @input="onScrub"
+      />
+    </div>
     <div v-if="radarOn" class="radar-legend">
       <span>Light</span>
       <span class="bar"></span>
@@ -249,10 +393,25 @@ defineExpose({
   box-shadow: var(--shadow);
   background: #0a0e1c;
 }
+.radar-bar {
+  display: flex; align-items: center; gap: 9px; flex: 0 0 auto;
+  font-size: 11px; color: var(--muted);
+}
 .radar-legend {
   display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
   font-size: 11px; color: var(--muted);
 }
+.radar-play {
+  flex: 0 0 auto; padding: 2px 7px; font-size: 11px; line-height: 1;
+  border-radius: 6px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); cursor: pointer;
+}
+.radar-play:hover { border-color: var(--accent); background: var(--card-2); }
+.radar-time { flex: 0 0 auto; font-variant-numeric: tabular-nums; min-width: 52px; }
+.radar-scrub {
+  flex: 1 1 auto; min-width: 0; accent-color: var(--accent); cursor: pointer;
+}
+.radar-scrub:disabled { opacity: 0.4; cursor: default; }
 .radar-legend .bar {
   flex: 0 0 auto; width: 110px; height: 7px; border-radius: 6px;
   background: linear-gradient(90deg, #1a73e8, #34d399, #fbbf24, #ef4444, #d946ef);
