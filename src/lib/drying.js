@@ -199,6 +199,7 @@ function buildTimeline(
   precipProb,
   rh,
   precipTolerance,
+  basis,
   ideal,
   dryCutoffs,
   tempThresholds
@@ -224,6 +225,8 @@ function buildTimeline(
       ideal && fval != null ? tempCondition(fval, ideal.min, ideal.max, tempThresholds) : null;
     const pp = precipProb && precipProb[i] != null ? precipProb[i] : null;
     const precipCond = precipCondition(pp, precipTolerance);
+    // Ride windows are scored against either actual temp or "feels like".
+    const primaryCond = basis === "feels" && feelsCond ? feelsCond : tempCond;
     out.push({
       time: times[i],
       wetness: round2(w),
@@ -239,7 +242,10 @@ function buildTimeline(
       dry,
       tempCond,
       feelsCond,
-      condition: worse(worse(dry, tempCond), precipCond),
+      // Why an hour is non-green (for the "no ideal window" reasons).
+      tempBad: !!(primaryCond && primaryCond.key !== "green"),
+      precipBad: precipCond != null,
+      condition: worse(worse(dry, primaryCond), precipCond),
     });
   }
   return out;
@@ -270,6 +276,7 @@ export function computeConditions(opts) {
     precipProb = null,
     rh = null,
     precipTolerance = 100, // % chance above which precip makes an hour unfavorable
+    basis = "temp", // "temp" | "feels" — which temperature scores ride windows
     now,
     drainage = "medium",
     timelineHours = 24 * 7, // cover the full week so summaries can look ahead
@@ -312,6 +319,10 @@ export function computeConditions(opts) {
   const dryCond = conditionFor(hoursUntilDry, dryCutoffs);
   const tempNow = temp ? temp[upTo] : null;
   const tempCond = ideal ? tempCondition(tempNow, ideal.min, ideal.max, tempThresholds) : null;
+  const feelsNow = feels ? feels[upTo] : null;
+  const feelsCondNow =
+    ideal && feelsNow != null ? tempCondition(feelsNow, ideal.min, ideal.max, tempThresholds) : null;
+  const primaryCondNow = basis === "feels" && feelsCondNow ? feelsCondNow : tempCond;
   const precipNow = precipProb && precipProb[upTo] != null ? precipProb[upTo] : null;
   const precipCondNow = precipCondition(precipNow, precipTolerance);
 
@@ -323,7 +334,7 @@ export function computeConditions(opts) {
     dryCondition: dryCond,
     tempNow: tempNow == null ? null : Math.round(tempNow),
     tempCondition: tempCond,
-    condition: worse(worse(dryCond, tempCond), precipCondNow), // combined headline
+    condition: worse(worse(dryCond, primaryCondNow), precipCondNow), // combined headline
     recentRainIn: round2(recentRainIn),
     sun,
     timeline: buildTimeline(
@@ -339,6 +350,7 @@ export function computeConditions(opts) {
       precipProb,
       rh,
       precipTolerance,
+      basis,
       ideal,
       dryCutoffs,
       tempThresholds

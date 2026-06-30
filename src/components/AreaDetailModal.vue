@@ -278,7 +278,9 @@ const showRH = ref(true);
                 <span v-if="dayCharts[i] && dayCharts[i].windows.length" class="w-win">·
                   rideable<template v-for="(win, wi) in dayCharts[i].windows" :key="wi">{{ wi ? "," : "" }} {{ win.startLabel }}–{{ win.endLabel }}</template>
                 </span>
-                <span v-else class="w-win none">· no ideal window</span>
+                <span v-else class="w-win none">· no ideal window<template
+                  v-if="d.noWindowReasons && d.noWindowReasons.length"
+                > ({{ d.noWindowReasons.join(", ") }})</template></span>
               </div>
               <div v-if="dayCharts[i]" class="w-chart">
                 <div class="w-temps">

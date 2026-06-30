@@ -205,7 +205,17 @@ function dayOutlooks(cells, sun, maxDays = 3) {
       i = q + 1;
     }
 
-    out.push({ date: day, sunrise: s.sunrise, sunset: s.sunset, bars, windows });
+    // For a day with no rideable window, list which factors blocked it.
+    let noWindowReasons = [];
+    if (!windows.length) {
+      if (dayIdx.some((ci) => cells[ci].tempBad)) noWindowReasons.push("temperature");
+      if (dayIdx.some((ci) => cells[ci].precipBad)) noWindowReasons.push("precip chance");
+      if (dayIdx.some((ci) => cells[ci].dry && cells[ci].dry.key !== "green")) {
+        noWindowReasons.push("trail conditions");
+      }
+    }
+
+    out.push({ date: day, sunrise: s.sunrise, sunset: s.sunset, bars, windows, noWindowReasons });
   }
   return out;
 }

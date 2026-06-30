@@ -19,6 +19,7 @@ import {
 
 const IDEAL_KEY = "trail_ideal_temp_v1";
 const PRECIP_KEY = "mtb_precip_tol";
+const BASIS_KEY = "mtb_basis";
 const SETTINGS_KEY = "mtb_settings_v1";
 
 const areas = ref([]);
@@ -305,6 +306,34 @@ function onPrecipChange() {
   recomputeAll(); // already-fetched precip-probability — no refetch needed
 }
 
+// Prediction basis: score ride windows by actual temp or "feels like".
+const predictionBasis = ref(localStorage.getItem(BASIS_KEY) === "feels" ? "feels" : "temp");
+function setBasis(b) {
+  predictionBasis.value = b === "feels" ? "feels" : "temp";
+  try {
+    localStorage.setItem(BASIS_KEY, predictionBasis.value);
+  } catch {
+    /* ignore */
+  }
+  recomputeAll();
+}
+
+// Info popovers for the scoring controls.
+const activeInfo = ref(null);
+const INFO = {
+  temp: "The air-temperature range you most enjoy riding in. Hours inside this band score as ideal; the further outside, the worse — with separate tolerances for hotter vs. colder.",
+  precip:
+    "The highest chance of precipitation you'll put up with. Any forecast hour whose rain/snow chance is above this is treated as unfavorable and dropped from your ride windows.",
+  basis:
+    "Whether ride windows are judged by the actual air temperature or the “feels like” temperature (which factors in humidity and wind). “Feels like” is usually stricter in humid heat.",
+};
+function toggleInfo(key) {
+  activeInfo.value = activeInfo.value === key ? null : key;
+}
+function onDocClick(e) {
+  if (!e.target.closest(".info, .info-pop")) activeInfo.value = null;
+}
+
 function persist() {
   saveAreas(areas.value);
 }
@@ -326,6 +355,7 @@ function recompute(area) {
     idealTempMin: ideal.min,
     idealTempMax: ideal.max,
     precipTolerance: precipTol.value,
+    basis: predictionBasis.value,
     tempThresholds: tempThresholds(),
     daily: c.wx.daily,
   });
@@ -412,10 +442,12 @@ onMounted(() => {
       sortBy.value = "conditions";
     });
   }
+  document.addEventListener("click", onDocClick);
 });
 
 onUnmounted(() => {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  document.removeEventListener("click", onDocClick);
 });
 </script>
 
@@ -435,6 +467,7 @@ onUnmounted(() => {
     <div class="settings">
       <div class="setting">
         <label>Ideal riding temp</label>
+        <button class="info" title="What is this?" @click.stop="toggleInfo('temp')">ⓘ</button>
         <input
           class="num"
           type="number"
@@ -455,10 +488,12 @@ onUnmounted(() => {
           @change="onIdealChange"
         />
         <span class="val">°F</span>
+        <div v-if="activeInfo === 'temp'" class="info-pop">{{ INFO.temp }}</div>
       </div>
 
       <div class="setting">
         <label>Precip % tolerance</label>
+        <button class="info" title="What is this?" @click.stop="toggleInfo('precip')">ⓘ</button>
         <input
           type="range"
           min="0"
@@ -468,6 +503,17 @@ onUnmounted(() => {
           @change="onPrecipChange"
         />
         <span class="val">{{ precipTol }}%</span>
+        <div v-if="activeInfo === 'precip'" class="info-pop">{{ INFO.precip }}</div>
+      </div>
+
+      <div class="setting">
+        <label>Prediction basis</label>
+        <button class="info" title="What is this?" @click.stop="toggleInfo('basis')">ⓘ</button>
+        <div class="seg">
+          <button :class="{ on: predictionBasis === 'temp' }" @click="setBasis('temp')">Temp</button>
+          <button :class="{ on: predictionBasis === 'feels' }" @click="setBasis('feels')">Feels like</button>
+        </div>
+        <div v-if="activeInfo === 'basis'" class="info-pop">{{ INFO.basis }}</div>
       </div>
     </div>
 
@@ -578,10 +624,30 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
   margin-bottom: 16px; padding: 10px 14px;
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
 }
-.setting { display: flex; align-items: center; gap: 8px; }
+.setting { display: flex; align-items: center; gap: 8px; position: relative; }
 .setting label {
   text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px; color: var(--muted);
 }
+.info {
+  flex: 0 0 auto; border: none; background: transparent; color: var(--muted);
+  font-size: 13px; line-height: 1; padding: 0; cursor: pointer; margin-left: -4px;
+}
+.info:hover { color: var(--accent); }
+.info-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 50;
+  width: 260px; padding: 9px 11px;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--shadow); color: var(--text);
+  font-size: 12px; line-height: 1.45; text-transform: none; letter-spacing: 0;
+}
+.seg { display: inline-flex; }
+.seg button {
+  padding: 5px 11px; font-size: 12px; border-radius: 0;
+  border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer;
+}
+.seg button:first-child { border-radius: 8px 0 0 8px; }
+.seg button:last-child { border-radius: 0 8px 8px 0; border-left: none; }
+.seg button.on { color: var(--text); border-color: var(--accent); background: var(--card-2); }
 .setting input[type="range"] { width: 110px; accent-color: var(--accent); cursor: pointer; }
 .setting input.num {
   width: 56px; padding: 5px 7px; font-size: 13px;
