@@ -18,6 +18,7 @@ import {
 } from "./lib/areas.js";
 
 const IDEAL_KEY = "trail_ideal_temp_v1";
+const PRECIP_KEY = "mtb_precip_tol";
 const SETTINGS_KEY = "mtb_settings_v1";
 
 const areas = ref([]);
@@ -286,6 +287,24 @@ function onIdealChange() {
   recomputeAll(); // temperature scoring only — no refetch needed
 }
 
+// Precip-chance tolerance (%): hours whose forecast precip chance exceeds this
+// are scored unfavorable. 100 = ignore precip chance entirely.
+const precipTol = ref(loadPrecipTol());
+function loadPrecipTol() {
+  const v = parseInt(localStorage.getItem(PRECIP_KEY), 10);
+  return v >= 0 && v <= 100 ? v : 50;
+}
+function onPrecipChange() {
+  const v = Math.max(0, Math.min(100, Math.round(precipTol.value)));
+  precipTol.value = v;
+  try {
+    localStorage.setItem(PRECIP_KEY, String(v));
+  } catch {
+    /* ignore */
+  }
+  recomputeAll(); // already-fetched precip-probability — no refetch needed
+}
+
 function persist() {
   saveAreas(areas.value);
 }
@@ -306,6 +325,7 @@ function recompute(area) {
     drainage: area.drainage,
     idealTempMin: ideal.min,
     idealTempMax: ideal.max,
+    precipTolerance: precipTol.value,
     tempThresholds: tempThresholds(),
     daily: c.wx.daily,
   });
@@ -437,6 +457,18 @@ onUnmounted(() => {
         <span class="val">°F</span>
       </div>
 
+      <div class="setting">
+        <label>Precip % tolerance</label>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          v-model.number="precipTol"
+          @change="onPrecipChange"
+        />
+        <span class="val">{{ precipTol }}%</span>
+      </div>
     </div>
 
     <div class="key">

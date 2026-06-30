@@ -84,6 +84,13 @@ export function worse(a, b) {
   return a.severity >= b.severity ? a : b;
 }
 
+// Applied when an hour's precipitation chance exceeds the rider's tolerance —
+// makes the hour unfavorable (red) regardless of temp/dryness.
+const RAIN_TIER = { key: "red", label: "Rain likely", color: "var(--red)", severity: 3 };
+function precipCondition(prob, tolerance) {
+  return prob != null && tolerance != null && prob > tolerance ? RAIN_TIER : null;
+}
+
 // Drying rate in inches/hour for a given drainage factor.
 function dryRatePerHour(drainageFactor) {
   return 1 / (BASE_DRY_HOURS_PER_INCH * drainageFactor);
@@ -191,6 +198,7 @@ function buildTimeline(
   codes,
   precipProb,
   rh,
+  precipTolerance,
   ideal,
   dryCutoffs,
   tempThresholds
@@ -214,6 +222,8 @@ function buildTimeline(
     const tempCond = ideal ? tempCondition(tval, ideal.min, ideal.max, tempThresholds) : null;
     const feelsCond =
       ideal && fval != null ? tempCondition(fval, ideal.min, ideal.max, tempThresholds) : null;
+    const pp = precipProb && precipProb[i] != null ? precipProb[i] : null;
+    const precipCond = precipCondition(pp, precipTolerance);
     out.push({
       time: times[i],
       wetness: round2(w),
@@ -229,7 +239,7 @@ function buildTimeline(
       dry,
       tempCond,
       feelsCond,
-      condition: worse(dry, tempCond),
+      condition: worse(worse(dry, tempCond), precipCond),
     });
   }
   return out;
@@ -259,6 +269,7 @@ export function computeConditions(opts) {
     codes = null,
     precipProb = null,
     rh = null,
+    precipTolerance = 100, // % chance above which precip makes an hour unfavorable
     now,
     drainage = "medium",
     timelineHours = 24 * 7, // cover the full week so summaries can look ahead
@@ -297,10 +308,12 @@ export function computeConditions(opts) {
   let recentRainIn = 0;
   for (let i = 0; i <= upTo; i++) recentRainIn += precip[i] || 0;
 
-  // Current-hour conditions: dryness, temperature, and the combined headline.
+  // Current-hour conditions: dryness, temperature, precip chance, headline.
   const dryCond = conditionFor(hoursUntilDry, dryCutoffs);
   const tempNow = temp ? temp[upTo] : null;
   const tempCond = ideal ? tempCondition(tempNow, ideal.min, ideal.max, tempThresholds) : null;
+  const precipNow = precipProb && precipProb[upTo] != null ? precipProb[upTo] : null;
+  const precipCondNow = precipCondition(precipNow, precipTolerance);
 
   return {
     wetness: round2(wetness),
@@ -310,7 +323,7 @@ export function computeConditions(opts) {
     dryCondition: dryCond,
     tempNow: tempNow == null ? null : Math.round(tempNow),
     tempCondition: tempCond,
-    condition: worse(dryCond, tempCond), // combined headline
+    condition: worse(worse(dryCond, tempCond), precipCondNow), // combined headline
     recentRainIn: round2(recentRainIn),
     sun,
     timeline: buildTimeline(
@@ -325,6 +338,7 @@ export function computeConditions(opts) {
       codes,
       precipProb,
       rh,
+      precipTolerance,
       ideal,
       dryCutoffs,
       tempThresholds
