@@ -45,7 +45,7 @@ const DEFAULT_SETTINGS = {
     green: { label: "Ideal" },
     yellow: { label: "Tolerable", hot: TEMP_THRESHOLDS.yellow.hot, cold: TEMP_THRESHOLDS.yellow.cold },
     orange: { label: "Uncomfortable", hot: TEMP_THRESHOLDS.orange.hot, cold: TEMP_THRESHOLDS.orange.cold },
-    red: { label: "No", hot: TEMP_THRESHOLDS.red.hot, cold: TEMP_THRESHOLDS.red.cold },
+    red: { label: "Unbearable", hot: TEMP_THRESHOLDS.red.hot, cold: TEMP_THRESHOLDS.red.cold },
   },
   maxWindows: 3,
   // Auto-refresh interval in minutes; 0 = off (refresh only on load / ↻ button).
@@ -84,9 +84,13 @@ function loadSettings() {
       const lb = parseInt(v.lookbackDays, 10);
       const mw = parseInt(v.maxWindows, 10);
       const rf = parseInt(v.refreshMinutes, 10);
+      const temp = mergeTemp(v.temp);
+      // Migrate the former default "No" label to the new "Unbearable" default
+      // (leaves any custom label untouched).
+      if (temp.red.label === "No") temp.red.label = DEFAULT_SETTINGS.temp.red.label;
       return {
         lookbackDays: lb >= 3 && lb <= 7 ? lb : DEFAULT_SETTINGS.lookbackDays,
-        temp: mergeTemp(v.temp),
+        temp,
         maxWindows: mw >= 1 && mw <= 10 ? mw : DEFAULT_SETTINGS.maxWindows,
         refreshMinutes: rf >= 0 && rf <= 1440 ? rf : DEFAULT_SETTINGS.refreshMinutes,
       };
