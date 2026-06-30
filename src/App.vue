@@ -205,17 +205,60 @@ function onDragEnd(evt) {
   persist();
 }
 
-// Sort control: drag order (manual), name, or best conditions.
+// Sort control: drag order (manual), name, best conditions, or nearest.
 const SORT_KEY = "mtb_sort";
 const sortBy = ref(localStorage.getItem(SORT_KEY) || "custom");
-watch(sortBy, (v) => {
+watch(sortBy, (v, old) => {
   try {
     localStorage.setItem(SORT_KEY, v);
   } catch {
     /* ignore */
   }
   if (sortable) sortable.option("disabled", v !== "custom");
+  // "Nearest" needs the user's location; request it (revert if denied).
+  if (v === "nearest") {
+    requestLocation(() => {
+      sortBy.value = old && old !== "nearest" ? old : "custom";
+      alert("Couldn't get your location. Allow location access to sort by distance.");
+    });
+  }
 });
+
+// User location for the "nearest" sort — requested lazily, not persisted.
+const userLoc = ref(null);
+const locating = ref(false);
+
+function requestLocation(onFail) {
+  if (userLoc.value || locating.value) return;
+  if (!navigator.geolocation) {
+    onFail && onFail();
+    return;
+  }
+  locating.value = true;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      userLoc.value = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      locating.value = false;
+    },
+    () => {
+      locating.value = false;
+      onFail && onFail();
+    },
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 }
+  );
+}
+
+// Great-circle distance in miles between two {lat, lon} points.
+function distanceMiles(a, b) {
+  const R = 3958.8;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
 
 // Temperature distance from the ideal band (0 = inside). Used as the primary
 // sort key for "best conditions", with hours-until-dry as the tiebreak.
@@ -240,6 +283,11 @@ const displayedAreas = computed(() => {
       const hb = rb ? rb.hoursUntilDry : Infinity;
       return ha - hb; // then drier first
     });
+  }
+  if (sortBy.value === "nearest") {
+    const loc = userLoc.value;
+    if (!loc) return list; // no fix yet — keep current order until it resolves
+    return [...list].sort((a, b) => distanceMiles(loc, a) - distanceMiles(loc, b));
   }
   return list; // custom / drag order
 });
@@ -365,6 +413,13 @@ onMounted(() => {
   areas.value = saved;
   refreshAll();
   restartAutoRefresh();
+  // If "nearest" was the last-used sort, the watcher won't fire on load, so
+  // kick off the location request here (silently revert if it's denied).
+  if (sortBy.value === "nearest") {
+    requestLocation(() => {
+      sortBy.value = "custom";
+    });
+  }
 });
 
 onUnmounted(() => {
@@ -438,6 +493,7 @@ onUnmounted(() => {
               <option value="custom">Drag order</option>
               <option value="name">Name A–Z</option>
               <option value="conditions">Best conditions</option>
+              <option value="nearest">Nearest</option>
             </select>
           </label>
         </div>
@@ -600,5 +656,12 @@ footer {
   .right { order: -1; } /* map on top when stacked */
   .left { position: static; max-height: none; }
   .board { overflow: visible; padding-right: 0; }
+}
+
+/* Narrow screens: let the legend rows wrap instead of crushing the swatches. */
+@media (max-width: 560px) {
+  .key-row { flex-wrap: wrap; gap: 6px 14px; }
+  .key-title { flex-basis: 100%; }
+  .grad-bar { max-width: none; }
 }
 </style>
