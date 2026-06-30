@@ -32,6 +32,14 @@ const curTemp = computed(() => {
   const t = c?.temperature_2m ?? (props.result ? props.result.tempNow : null);
   return t != null ? Math.round(t) : null;
 });
+const feels = computed(() => {
+  const f = props.current?.apparent_temperature;
+  return f != null ? Math.round(f) : null;
+});
+const rh = computed(() => {
+  const h = props.current?.relative_humidity_2m;
+  return h != null ? Math.round(h) : null;
+});
 </script>
 
 <template>
@@ -43,8 +51,13 @@ const curTemp = computed(() => {
     </div>
 
     <div v-if="result" class="quick">
-      <span class="q-temp" :style="{ color: tempColor }">{{ curTemp != null ? curTemp + "°" : "—" }}</span>
-      <span class="q-wet" :style="{ color: wetColor }">{{ wetText }}</span>
+      <div class="q-head">Current conditions</div>
+      <div class="q-params">
+        <span class="q-field">Temp: <b :style="{ color: tempColor }">{{ curTemp != null ? curTemp + "°" : "—" }}</b></span>
+        <span class="q-field">Feels like: <b :style="{ color: tempColor }">{{ feels != null ? feels + "°" : "—" }}</b></span>
+        <span class="q-field">RH: <b>{{ rh != null ? rh + "%" : "—" }}</b></span>
+        <span class="q-field">Trails: <b :style="{ color: wetColor }">{{ wetText }}</b></span>
+      </div>
     </div>
     <div v-else-if="error" class="quick muted">retrying…</div>
     <div v-else class="quick muted">Loading…</div>
@@ -74,12 +87,15 @@ const curTemp = computed(() => {
 .region { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .quick {
-  display: flex; align-items: baseline; gap: 12px; flex: 0 0 auto;
-  font-variant-numeric: tabular-nums;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  flex: 0 1 auto;
+  font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
-.q-temp { font-size: 20px; font-weight: 750; line-height: 1; }
-.q-wet { font-size: 14px; font-weight: 650; }
-.quick.muted { color: var(--muted); font-size: 12px; }
+.q-head { font-weight: 650; color: var(--text); }
+.q-params { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 3px 12px; }
+.q-field { white-space: nowrap; }
+.q-field b { font-weight: 700; color: var(--text); }
+.quick.muted { font-size: 12px; }
 
 .remove {
   flex: 0 0 auto;

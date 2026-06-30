@@ -205,9 +205,10 @@ function dayTitle(iso) {
   return dayLabel(`${iso}T12:00`);
 }
 
-// Which series are visible (toggled via the legend). Both on by default.
+// Which series are visible (toggled via the legend). All on by default.
 const showActual = ref(true);
 const showFeels = ref(true);
+const showRH = ref(true);
 </script>
 
 <template>
@@ -226,7 +227,7 @@ const showFeels = ref(true);
       <template v-else-if="result">
         <!-- Riding conditions -->
         <section class="block">
-          <h3>Riding conditions</h3>
+          <h3>Current riding conditions</h3>
           <div class="ride-row">
             <div class="big">
               <span class="bigval" :style="{ color: tempColor }">
@@ -235,7 +236,7 @@ const showFeels = ref(true);
               <span class="unit">F</span>
             </div>
             <div class="metrics">
-              <span v-if="cur.feels != null">Feels {{ cur.feels }}°</span>
+              <span v-if="cur.feels != null">Feels like {{ cur.feels }}°</span>
               <span v-if="cur.humidity != null">💧 {{ cur.humidity }}% RH</span>
             </div>
           </div>
@@ -244,7 +245,7 @@ const showFeels = ref(true);
 
         <!-- Trail conditions -->
         <section class="block trail">
-          <h3>Trail conditions</h3>
+          <h3>Current trail conditions</h3>
           <div class="trail-row">
             <span class="trail-status" :style="{ color: wetColor }">{{ wetText }}</span>
             <span class="metrics">
@@ -259,14 +260,15 @@ const showFeels = ref(true);
         <!-- Ride outlook (whole days, sunrise→sunset) -->
         <div class="windows">
           <div class="w-head">
-            <div class="w-label">🚵 Ride outlook</div>
+            <div class="w-label">🚵 Ride outlook<span class="w-sun"> (sunrise to sunset)</span></div>
             <div v-if="hasAnyFeels" class="w-legend">
               <button class="leg" :class="{ off: !showActual }" @click="showActual = !showActual">
                 <span class="leg-line solid"></span>Actual
               </button>
               <button class="leg" :class="{ off: !showFeels }" @click="showFeels = !showFeels">
-                <span class="leg-line dashed"></span>Feels like
+                <span class="leg-line dashed"></span>(Feels like)
               </button>
+              <button class="leg" :class="{ off: !showRH }" @click="showRH = !showRH">RH%</button>
             </div>
           </div>
           <ul v-if="dayOutlooks.length" class="w-list">
@@ -282,8 +284,8 @@ const showFeels = ref(true);
                 <div class="w-temps">
                   <span v-for="(b, bi) in d.bars" :key="bi" class="w-t">
                     <span v-if="showActual" class="w-ta" :style="{ color: tierHex(b.tier, b.dir) }">{{ b.temp != null ? b.temp + "°" : "—" }}</span>
-                    <span v-if="showFeels && b.feels != null" class="w-tf" :style="{ color: tierHex(b.feelsTier, b.feelsDir) }">{{ b.feels }}°</span>
-                    <span v-if="b.rh != null" class="w-rh">{{ b.rh }}%</span>
+                    <span v-if="showFeels && b.feels != null" class="w-tf" :style="{ color: tierHex(b.feelsTier, b.feelsDir) }">({{ b.feels }}°)</span>
+                    <span v-if="showRH && b.rh != null" class="w-rh">{{ b.rh }}%</span>
                   </span>
                 </div>
                 <div class="w-spark-wrap">
@@ -396,6 +398,7 @@ const showFeels = ref(true);
 }
 .w-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .w-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); font-weight: 650; }
+.w-sun { text-transform: none; letter-spacing: 0; font-weight: 500; opacity: 0.85; }
 .w-legend { display: flex; gap: 6px; }
 .leg {
   display: inline-flex; align-items: center; gap: 6px;
