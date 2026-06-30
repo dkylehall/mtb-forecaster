@@ -54,13 +54,13 @@ function normalizeTemp() {
         </div>
       </section>
 
-      <!-- Ride windows to show -->
+      <!-- Days of forecast to display -->
       <section class="group">
-        <h3>Ride windows to show</h3>
-        <p class="hint">How many upcoming ideal ride windows to list per area.</p>
+        <h3>Days of forecast to display</h3>
+        <p class="hint">How many days to show in each area's ride outlook.</p>
         <div class="row">
-          <input type="range" min="1" max="10" step="1" v-model.number="settings.maxWindows" />
-          <span class="val">{{ settings.maxWindows }}</span>
+          <input type="range" min="1" max="7" step="1" v-model.number="settings.maxWindows" />
+          <span class="val">{{ settings.maxWindows }} day{{ settings.maxWindows === 1 ? "" : "s" }}</span>
         </div>
       </section>
 

@@ -52,6 +52,7 @@ export function summarize(result, now, maxWindows = 3) {
     next: nextChange(series),
     nextRain: nextRain(cells),
     rideWindows: rideWindows(cells, result.sun, maxWindows),
+    dayOutlooks: dayOutlooks(cells, result.sun, maxWindows),
     days: dailyOutlook(cells),
   };
 }
@@ -138,6 +139,75 @@ function rideWindows(cells, sun, maxWindows = 3) {
     }
   }
   return windows;
+}
+
+// Per-day outlook: every daylight hour (sunrise→sunset) as chart bars, plus the
+// green stretches within the day as "optimal" ride windows (each with why it
+// ends). Unlike rideWindows (which lists only rideable stretches), this always
+// returns the full day so the chart can show the whole arc.
+function dayOutlooks(cells, sun, maxDays = 3) {
+  const sunMap = sun || synthSun(cells);
+  const out = [];
+  for (const day of Object.keys(sunMap).sort()) {
+    if (out.length >= maxDays) break;
+    const s = sunMap[day];
+    if (!s || !s.sunrise || !s.sunset) continue;
+    const srH = timeOfDay(s.sunrise);
+    const ssH = timeOfDay(s.sunset);
+
+    const dayIdx = [];
+    for (let i = 0; i < cells.length; i++) {
+      if (dateKey(cells[i].time) !== day) continue;
+      const h = timeOfDay(cells[i].time);
+      if (h >= Math.floor(srH) && h <= Math.floor(ssH)) dayIdx.push(i);
+    }
+    if (!dayIdx.length) continue;
+
+    const bars = dayIdx.map((ci) => {
+      const c = cells[ci];
+      return {
+        time: c.time,
+        temp: c.temp,
+        tier: c.tempCond ? c.tempCond.key : "green",
+        feels: c.feels,
+        feelsTier: c.feelsCond ? c.feelsCond.key : c.tempCond ? c.tempCond.key : "green",
+        dir: c.tempDir,
+        feelsDir: c.feelsDir,
+        code: c.code,
+        precip: c.precip,
+        precipProb: c.precipProb,
+        rh: c.rh,
+      };
+    });
+
+    // Green stretches within the day → optimal ride windows.
+    const windows = [];
+    let i = 0;
+    while (i < dayIdx.length) {
+      if (cells[dayIdx[i]].condition.key !== "green") {
+        i++;
+        continue;
+      }
+      const p = i;
+      let q = p;
+      while (q + 1 < dayIdx.length && cells[dayIdx[q + 1]].condition.key === "green") q++;
+      const at = cells[dayIdx[p]].time;
+      let endIso, reason;
+      if (q === dayIdx.length - 1) {
+        endIso = s.sunset;
+        reason = "sunset";
+      } else {
+        const bIdx = dayIdx[q + 1];
+        endIso = cells[bIdx].time;
+        reason = degradeReason(cells, bIdx).reason;
+      }
+      windows.push({ at, end: endIso, reason });
+      i = q + 1;
+    }
+
+    out.push({ date: day, sunrise: s.sunrise, sunset: s.sunset, bars, windows });
+  }
+  return out;
 }
 
 // Hour-of-day as a decimal (e.g. "…T05:54" → 5.9), read straight from the

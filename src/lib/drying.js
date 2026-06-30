@@ -189,6 +189,8 @@ function buildTimeline(
   temp,
   feels,
   codes,
+  precipProb,
+  rh,
   ideal,
   dryCutoffs,
   tempThresholds
@@ -222,6 +224,8 @@ function buildTimeline(
       tempDir: tempDir(tval, ideal),
       feelsDir: tempDir(fval, ideal),
       code: codes ? codes[i] : null,
+      precipProb: precipProb && precipProb[i] != null ? Math.round(precipProb[i]) : null,
+      rh: rh && rh[i] != null ? Math.round(rh[i]) : null,
       dry,
       tempCond,
       feelsCond,
@@ -253,6 +257,8 @@ export function computeConditions(opts) {
     temp = null,
     feels = null,
     codes = null,
+    precipProb = null,
+    rh = null,
     now,
     drainage = "medium",
     timelineHours = 24 * 7, // cover the full week so summaries can look ahead
@@ -317,6 +323,8 @@ export function computeConditions(opts) {
       temp,
       feels,
       codes,
+      precipProb,
+      rh,
       ideal,
       dryCutoffs,
       tempThresholds

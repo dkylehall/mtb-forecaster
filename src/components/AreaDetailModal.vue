@@ -59,27 +59,6 @@ function dayLabel(iso) {
   const md = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return `${wd} ${md}`;
 }
-// Why the window closes, in plain words. Sunset = ran out of daylight.
-const REASON_TEXT = {
-  heat: "too hot", cold: "too cold", rain: "too wet", wet: "too wet", sunset: "sundown",
-};
-function reasonText(w) {
-  if (!w.reason) return "";
-  return REASON_TEXT[w.reason] || w.reason;
-}
-
-const rideWindows = computed(() => summary.value?.rideWindows || []);
-function windowText(w) {
-  const bars = w.bars || [];
-  const a = bars.length ? bars[0].time : w.at;
-  const b = bars.length ? bars[bars.length - 1].time : w.end;
-  const start = clock(a);
-  const end = clock(b);
-  const range = start === end ? start : `${start}–${end}`;
-  const r = reasonText(w);
-  return `${dayLabel(w.at)} · ${range}${r ? ` [${r}]` : ""}`;
-}
-
 // Concrete hex per tier (SVG gradient stops won't take CSS vars reliably).
 // Hot deviations warm up (yellow→orange→red); cold deviations cool down
 // (blue→indigo→purple) so direction reads at a glance.
@@ -186,16 +165,45 @@ function markerX(iso, bars) {
   return Math.max(0, Math.min(1, frac)) * 100;
 }
 
-const windowCharts = computed(() =>
-  rideWindows.value.map((w, i) => {
-    if (!w.bars || !w.bars.length) return null;
-    const c = chartFor(w.bars, i);
-    c.srX = markerX(w.sunrise, w.bars);
-    c.ssX = markerX(w.sunset, w.bars);
+// Per-day outlook charts: full sunrise→sunset arc, with the optimal ride
+// windows marked as vertical dashed lines labelled with their start/end times.
+const dayOutlooks = computed(() => summary.value?.dayOutlooks || []);
+const dayCharts = computed(() =>
+  dayOutlooks.value.map((d, i) => {
+    if (!d.bars || !d.bars.length) return null;
+    const c = chartFor(d.bars, i);
+    c.date = d.date;
+    c.srX = markerX(d.sunrise, d.bars);
+    c.ssX = markerX(d.sunset, d.bars);
+    c.windows = (d.windows || [])
+      .map((w) => ({
+        startX: markerX(w.at, d.bars),
+        endX: markerX(w.end, d.bars),
+        startLabel: clock(w.at),
+        endLabel: clock(w.end),
+      }))
+      .filter((w) => w.startX != null || w.endX != null);
+    // Non-rideable segments = the complement of the windows across [0,100];
+    // these get hatched out so the clean stretches read as the ride windows.
+    const wins = c.windows
+      .filter((w) => w.startX != null && w.endX != null)
+      .map((w) => ({ s: Math.max(0, Math.min(100, w.startX)), e: Math.max(0, Math.min(100, w.endX)) }))
+      .sort((a, b) => a.s - b.s);
+    const dim = [];
+    let cursor = 0;
+    for (const w of wins) {
+      if (w.s > cursor) dim.push({ left: cursor, width: w.s - cursor });
+      cursor = Math.max(cursor, w.e);
+    }
+    if (cursor < 100) dim.push({ left: cursor, width: 100 - cursor });
+    c.dimSegs = dim;
     return c;
   })
 );
-const hasAnyFeels = computed(() => windowCharts.value.some((c) => c && c.feels));
+const hasAnyFeels = computed(() => dayCharts.value.some((c) => c && c.feels));
+function dayTitle(iso) {
+  return dayLabel(`${iso}T12:00`);
+}
 
 // Which series are visible (toggled via the legend). Both on by default.
 const showActual = ref(true);
@@ -248,11 +256,11 @@ const showFeels = ref(true);
           <ConditionSummary :summary="summary" :result="result" :show="['wet']" />
         </section>
 
-        <!-- Ideal ride windows -->
-        <div class="windows" :class="{ none: !rideWindows.length }">
+        <!-- Ride outlook (whole days, sunrise→sunset) -->
+        <div class="windows">
           <div class="w-head">
-            <div class="w-label">🚵 Ideal ride windows</div>
-            <div v-if="rideWindows.length && hasAnyFeels" class="w-legend">
+            <div class="w-label">🚵 Ride outlook</div>
+            <div v-if="hasAnyFeels" class="w-legend">
               <button class="leg" :class="{ off: !showActual }" @click="showActual = !showActual">
                 <span class="leg-line solid"></span>Actual
               </button>
@@ -261,108 +269,91 @@ const showFeels = ref(true);
               </button>
             </div>
           </div>
-          <ul v-if="rideWindows.length" class="w-list">
-            <li v-for="(w, i) in rideWindows" :key="i" class="w-item">
-              <div class="w-text">{{ windowText(w) }}</div>
-              <div v-if="windowCharts[i]" class="w-chart">
+          <ul v-if="dayOutlooks.length" class="w-list">
+            <li v-for="(d, i) in dayOutlooks" :key="i" class="w-item">
+              <div class="w-text">
+                {{ dayTitle(d.date) }}
+                <span v-if="dayCharts[i] && dayCharts[i].windows.length" class="w-win">·
+                  rideable<template v-for="(win, wi) in dayCharts[i].windows" :key="wi">{{ wi ? "," : "" }} {{ win.startLabel }}–{{ win.endLabel }}</template>
+                </span>
+                <span v-else class="w-win none">· no ideal window</span>
+              </div>
+              <div v-if="dayCharts[i]" class="w-chart">
                 <div class="w-temps">
-                  <span
-                    v-for="(b, bi) in w.bars"
-                    :key="bi"
-                    class="w-t"
-                    :style="{ color: showActual ? tierHex(b.tier, b.dir) : tierHex(b.feelsTier, b.feelsDir) }"
-                  ><template v-if="showActual">{{ b.temp != null ? b.temp + "°" : "—"
-                    }}<small
-                      v-if="showFeels && b.feels != null && b.feels !== b.temp"
-                      class="w-feels"
-                      :style="{ color: tierHex(b.feelsTier, b.feelsDir) }"
-                    > ({{ b.feels }}°)</small></template><template
-                    v-else-if="showFeels">{{ b.feels != null ? b.feels + "°" : "—" }}</template></span>
+                  <span v-for="(b, bi) in d.bars" :key="bi" class="w-t">
+                    <span v-if="showActual" class="w-ta" :style="{ color: tierHex(b.tier, b.dir) }">{{ b.temp != null ? b.temp + "°" : "—" }}</span>
+                    <span v-if="showFeels && b.feels != null" class="w-tf" :style="{ color: tierHex(b.feelsTier, b.feelsDir) }">{{ b.feels }}°</span>
+                    <span v-if="b.rh != null" class="w-rh">{{ b.rh }}%</span>
+                  </span>
                 </div>
                 <div class="w-spark-wrap">
-                <svg class="w-spark" viewBox="0 0 100 46" preserveAspectRatio="none" aria-hidden="true">
-                  <defs>
-                    <linearGradient :id="windowCharts[i].gradId" x1="0" y1="0" x2="1" y2="0">
-                      <stop
-                        v-for="(s, si) in windowCharts[i].actual.stops"
-                        :key="si"
-                        :offset="s.offset"
-                        :stop-color="s.color"
-                      />
-                    </linearGradient>
-                    <linearGradient v-if="windowCharts[i].feels" :id="windowCharts[i].feelsGradId" x1="0" y1="0" x2="1" y2="0">
-                      <stop
-                        v-for="(s, si) in windowCharts[i].feels.stops"
-                        :key="si"
-                        :offset="s.offset"
-                        :stop-color="s.color"
-                      />
-                    </linearGradient>
-                  </defs>
-                  <path
-                    v-if="showActual && windowCharts[i].actual.area"
-                    :d="windowCharts[i].actual.area"
-                    :fill="`url(#${windowCharts[i].gradId})`"
-                    fill-opacity="0.16"
-                    stroke="none"
-                  />
-                  <path
-                    v-if="showActual"
-                    :d="windowCharts[i].actual.line"
-                    fill="none"
-                    :stroke="`url(#${windowCharts[i].gradId})`"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    vector-effect="non-scaling-stroke"
-                  />
-                  <path
-                    v-if="showFeels && windowCharts[i].feels"
-                    :d="windowCharts[i].feels.line"
-                    fill="none"
-                    :stroke="`url(#${windowCharts[i].feelsGradId})`"
-                    stroke-width="2"
-                    stroke-dasharray="4 3"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    vector-effect="non-scaling-stroke"
-                  />
-                  <line
-                    v-if="windowCharts[i].srX != null"
-                    class="sun-line"
-                    :x1="windowCharts[i].srX" y1="1" :x2="windowCharts[i].srX" y2="45"
-                    vector-effect="non-scaling-stroke"
-                  />
-                  <line
-                    v-if="windowCharts[i].ssX != null"
-                    class="sun-line sunset"
-                    :x1="windowCharts[i].ssX" y1="1" :x2="windowCharts[i].ssX" y2="45"
-                    vector-effect="non-scaling-stroke"
-                  />
-                </svg>
-                <span
-                  v-if="windowCharts[i].srX != null"
-                  class="sun-mark"
-                  :style="{ left: windowCharts[i].srX + '%' }"
-                  title="Sunrise"
-                >🌅</span>
-                <span
-                  v-if="windowCharts[i].ssX != null"
-                  class="sun-mark"
-                  :style="{ left: windowCharts[i].ssX + '%' }"
-                  title="Sunset"
-                >🌇</span>
+                  <span
+                    v-for="(seg, si) in dayCharts[i].dimSegs"
+                    :key="'dim' + si"
+                    class="dim-band"
+                    :style="{ left: seg.left + '%', width: seg.width + '%' }"
+                  ></span>
+                  <svg class="w-spark" viewBox="0 0 100 46" preserveAspectRatio="none" aria-hidden="true">
+                    <defs>
+                      <linearGradient :id="dayCharts[i].gradId" x1="0" y1="0" x2="1" y2="0">
+                        <stop v-for="(s, si) in dayCharts[i].actual.stops" :key="si" :offset="s.offset" :stop-color="s.color" />
+                      </linearGradient>
+                      <linearGradient v-if="dayCharts[i].feels" :id="dayCharts[i].feelsGradId" x1="0" y1="0" x2="1" y2="0">
+                        <stop v-for="(s, si) in dayCharts[i].feels.stops" :key="si" :offset="s.offset" :stop-color="s.color" />
+                      </linearGradient>
+                    </defs>
+                    <path
+                      v-if="showActual && dayCharts[i].actual.area"
+                      :d="dayCharts[i].actual.area"
+                      :fill="`url(#${dayCharts[i].gradId})`"
+                      fill-opacity="0.16"
+                      stroke="none"
+                    />
+                    <path
+                      v-if="showActual"
+                      :d="dayCharts[i].actual.line"
+                      fill="none"
+                      :stroke="`url(#${dayCharts[i].gradId})`"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      vector-effect="non-scaling-stroke"
+                    />
+                    <path
+                      v-if="showFeels && dayCharts[i].feels"
+                      :d="dayCharts[i].feels.line"
+                      fill="none"
+                      :stroke="`url(#${dayCharts[i].feelsGradId})`"
+                      stroke-width="2"
+                      stroke-dasharray="4 3"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      vector-effect="non-scaling-stroke"
+                    />
+                  </svg>
+                  <template v-for="(win, wi) in dayCharts[i].windows" :key="'box' + wi">
+                    <span
+                      v-if="win.startX != null && win.endX != null"
+                      class="win-box"
+                      :style="{ left: win.startX + '%', width: win.endX - win.startX + '%' }"
+                    ></span>
+                  </template>
+                  <template v-for="(win, wi) in dayCharts[i].windows" :key="'wt' + wi">
+                    <span v-if="win.startX != null" class="win-label" :style="{ left: win.startX + '%' }">{{ win.startLabel }}</span>
+                    <span v-if="win.endX != null" class="win-label end" :style="{ left: win.endX + '%' }">{{ win.endLabel }}</span>
+                  </template>
                 </div>
                 <div class="w-times">
-                  <span v-for="(b, bi) in w.bars" :key="bi" class="w-time">
+                  <span v-for="(b, bi) in d.bars" :key="bi" class="w-time">
                     <span v-if="b.code != null" class="w-ico" :title="skyLabel(b.code)">{{ skyEmoji(b.code) }}</span>
+                    <span v-if="b.precipProb != null && b.precipProb > 0" class="w-prob">{{ b.precipProb }}%</span>
                     <span class="w-clock">{{ clock(b.time) }}</span>
                   </span>
                 </div>
               </div>
             </li>
           </ul>
-          <div v-else class="w-none">None in the foreseeable future</div>
+          <div v-else class="w-none">No outlook available</div>
         </div>
       </template>
 
@@ -425,10 +416,36 @@ const showFeels = ref(true);
 .w-chart { display: flex; flex-direction: column; gap: 1px; }
 .w-temps, .w-times { display: flex; justify-content: space-between; gap: 2px; }
 .w-t {
-  flex: 1 1 0; min-width: 0; text-align: center; white-space: nowrap;
-  font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+  flex: 1 1 0; min-width: 0; white-space: nowrap;
+  display: flex; flex-direction: column; align-items: center; line-height: 1.15;
+  font-variant-numeric: tabular-nums;
 }
-.w-feels { font-size: 9px; font-weight: 600; }
+.w-ta { font-size: 10px; font-weight: 700; }
+.w-tf { font-size: 9px; font-weight: 600; }
+.w-rh { font-size: 8px; color: var(--muted); }
+.w-prob { font-size: 8px; color: #7ec8ff; font-variant-numeric: tabular-nums; }
+/* Hatch out the non-rideable stretches so the clean gaps read as the windows. */
+.dim-band {
+  position: absolute; top: 0; bottom: 0; pointer-events: none;
+  background:
+    linear-gradient(rgba(8, 11, 20, 0.45), rgba(8, 11, 20, 0.45)),
+    repeating-linear-gradient(
+      45deg,
+      rgba(150, 160, 180, 0.22) 0, rgba(150, 160, 180, 0.22) 1px,
+      transparent 1px, transparent 6px
+    );
+}
+.win-label {
+  position: absolute; top: 0; transform: translateX(-50%);
+  font-size: 8.5px; font-weight: 700; color: var(--green);
+  background: rgba(11, 16, 32, 0.7); padding: 0 2px; border-radius: 3px;
+  white-space: nowrap; pointer-events: none;
+}
+.win-box {
+  position: absolute; top: 0; bottom: 0; pointer-events: none;
+  border: 1px dashed rgba(91, 224, 160, 0.7);
+  border-radius: 3px;
+}
 .w-spark-wrap { position: relative; }
 .w-spark { width: 100%; height: 46px; display: block; overflow: visible; }
 .sun-line { stroke: #ffce7a; stroke-width: 1.3; stroke-dasharray: 2 2; opacity: 0.7; }
