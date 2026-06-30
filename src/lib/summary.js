@@ -129,6 +129,8 @@ function rideWindows(cells, sun, maxWindows = 3) {
           tier: c.tempCond ? c.tempCond.key : "green",
           feels: c.feels,
           feelsTier: c.feelsCond ? c.feelsCond.key : c.tempCond ? c.tempCond.key : "green",
+          dir: c.tempDir,
+          feelsDir: c.feelsDir,
           code: c.code,
         });
       }

@@ -84,11 +84,16 @@ function windowText(w) {
 }
 
 // Concrete hex per tier (SVG gradient stops won't take CSS vars reliably).
+// Hot deviations warm up (yellow→orange→red); cold deviations cool down
+// (blue→indigo→purple) so direction reads at a glance.
 const TIER_HEX = {
   green: "#5be0a0", yellow: "#ffe45c", orange: "#ffb454", red: "#ff6b6b",
 };
-function tierHex(t) {
-  return TIER_HEX[t] || "#8aa0b8";
+const COLD_HEX = {
+  green: "#5be0a0", yellow: "#7ec8ff", orange: "#5b8def", red: "#a06bff",
+};
+function tierHex(t, dir) {
+  return (dir === "cold" ? COLD_HEX : TIER_HEX)[t] || "#8aa0b8";
 }
 // WMO weather code → [label, emoji] for the per-hour sky icons (sun vs shade).
 function skyEmoji(code) {
@@ -124,7 +129,7 @@ function smoothPath(pts) {
 }
 
 // One series (actual or feels-like): smooth line, fill, and per-point gradient.
-function seriesGeom(bars, valKey, tierKey, lo, hi, withArea) {
+function seriesGeom(bars, valKey, tierKey, dirKey, lo, hi, withArea) {
   const pts = bars.map((b, i) => {
     const x = bars.length === 1 ? 50 : (i / (bars.length - 1)) * 100;
     const v = b[valKey];
@@ -137,7 +142,7 @@ function seriesGeom(bars, valKey, tierKey, lo, hi, withArea) {
   const area = withArea && pts.length > 1 ? `${line} L${last.x},${CH_H} L${pts[0].x},${CH_H} Z` : "";
   const stops = bars.map((b, i) => ({
     offset: (bars.length === 1 ? 0 : (i / (bars.length - 1)) * 100).toFixed(1) + "%",
-    color: tierHex(b[tierKey]),
+    color: tierHex(b[tierKey], b[dirKey]),
   }));
   return { line, area, stops };
 }
@@ -158,8 +163,8 @@ function chartFor(bars, idx) {
   hi = mid + span / 2;
   const hasFeels = bars.some((b) => b.feels != null);
   return {
-    actual: seriesGeom(bars, "temp", "tier", lo, hi, true),
-    feels: hasFeels ? seriesGeom(bars, "feels", "feelsTier", lo, hi, false) : null,
+    actual: seriesGeom(bars, "temp", "tier", "dir", lo, hi, true),
+    feels: hasFeels ? seriesGeom(bars, "feels", "feelsTier", "feelsDir", lo, hi, false) : null,
     gradId: `wgrad-${idx}`,
     feelsGradId: `wfeels-${idx}`,
   };
@@ -243,12 +248,12 @@ const showFeels = ref(true);
                     v-for="(b, bi) in w.bars"
                     :key="bi"
                     class="w-t"
-                    :style="{ color: showActual ? tierHex(b.tier) : tierHex(b.feelsTier) }"
+                    :style="{ color: showActual ? tierHex(b.tier, b.dir) : tierHex(b.feelsTier, b.feelsDir) }"
                   ><template v-if="showActual">{{ b.temp != null ? b.temp + "°" : "—"
                     }}<small
                       v-if="showFeels && b.feels != null && b.feels !== b.temp"
                       class="w-feels"
-                      :style="{ color: tierHex(b.feelsTier) }"
+                      :style="{ color: tierHex(b.feelsTier, b.feelsDir) }"
                     > ({{ b.feels }}°)</small></template><template
                     v-else-if="showFeels">{{ b.feels != null ? b.feels + "°" : "—" }}</template></span>
                 </div>

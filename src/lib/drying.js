@@ -161,6 +161,16 @@ function hoursUntilDryForward(times, precip, nowMs, startWetness, dryRate) {
   return hours;
 }
 
+// Which side of the ideal band a temperature is on: "hot", "cold", or null
+// (inside the band / unknown). Lets the UI color cold deviations differently
+// from hot ones.
+function tempDir(t, ideal) {
+  if (!ideal || t == null) return null;
+  if (t > ideal.max) return "hot";
+  if (t < ideal.min) return "cold";
+  return null;
+}
+
 /**
  * Build an hour-by-hour timeline for charting. Each cell carries the dryness
  * condition, the temperature condition (if a temp series + ideal band are given),
@@ -209,6 +219,8 @@ function buildTimeline(
       hoursUntilDry: round1(hud),
       temp: tval == null ? null : Math.round(tval),
       feels: fval == null ? null : Math.round(fval),
+      tempDir: tempDir(tval, ideal),
+      feelsDir: tempDir(fval, ideal),
       code: codes ? codes[i] : null,
       dry,
       tempCond,
