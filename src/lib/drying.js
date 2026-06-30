@@ -161,6 +161,16 @@ function hoursUntilDryForward(times, precip, nowMs, startWetness, dryRate) {
   return hours;
 }
 
+// Which side of the ideal band a temperature is on: "hot", "cold", or null
+// (inside the band / unknown). Lets the UI color cold deviations differently
+// from hot ones.
+function tempDir(t, ideal) {
+  if (!ideal || t == null) return null;
+  if (t > ideal.max) return "hot";
+  if (t < ideal.min) return "cold";
+  return null;
+}
+
 /**
  * Build an hour-by-hour timeline for charting. Each cell carries the dryness
  * condition, the temperature condition (if a temp series + ideal band are given),
@@ -177,6 +187,8 @@ function buildTimeline(
   dryRate,
   maxHours,
   temp,
+  feels,
+  codes,
   ideal,
   dryCutoffs,
   tempThresholds
@@ -196,15 +208,23 @@ function buildTimeline(
     const hud = w / dryRate;
     const dry = conditionFor(hud, dryCutoffs);
     const tval = temp ? temp[i] : null;
+    const fval = feels ? feels[i] : null;
     const tempCond = ideal ? tempCondition(tval, ideal.min, ideal.max, tempThresholds) : null;
+    const feelsCond =
+      ideal && fval != null ? tempCondition(fval, ideal.min, ideal.max, tempThresholds) : null;
     out.push({
       time: times[i],
       wetness: round2(w),
       precip: round2(p),
       hoursUntilDry: round1(hud),
       temp: tval == null ? null : Math.round(tval),
+      feels: fval == null ? null : Math.round(fval),
+      tempDir: tempDir(tval, ideal),
+      feelsDir: tempDir(fval, ideal),
+      code: codes ? codes[i] : null,
       dry,
       tempCond,
+      feelsCond,
       condition: worse(dry, tempCond),
     });
   }
@@ -231,6 +251,8 @@ export function computeConditions(opts) {
     times,
     precip,
     temp = null,
+    feels = null,
+    codes = null,
     now,
     drainage = "medium",
     timelineHours = 24 * 7, // cover the full week so summaries can look ahead
@@ -293,6 +315,8 @@ export function computeConditions(opts) {
       dryRate,
       timelineHours,
       temp,
+      feels,
+      codes,
       ideal,
       dryCutoffs,
       tempThresholds
