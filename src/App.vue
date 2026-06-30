@@ -330,6 +330,8 @@ function recompute(area) {
     times: c.wx.hourly.time,
     precip: c.wx.hourly.precipitation,
     temp: c.wx.hourly.temperature_2m,
+    feels: c.wx.hourly.apparent_temperature,
+    codes: c.wx.hourly.weather_code,
     now: new Date(),
     drainage: area.drainage,
     idealTempMin: ideal.min,

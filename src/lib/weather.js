@@ -48,7 +48,8 @@ export async function fetchTrailWeather(lat, lon, opts = {}) {
     longitude: String(lon),
     current:
       "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,precipitation",
-    hourly: "precipitation,precipitation_probability,weather_code,temperature_2m",
+    hourly:
+      "precipitation,precipitation_probability,weather_code,temperature_2m,apparent_temperature",
     daily:
       "sunrise,sunset,precipitation_sum,weather_code,temperature_2m_max,temperature_2m_min",
     temperature_unit: "fahrenheit",

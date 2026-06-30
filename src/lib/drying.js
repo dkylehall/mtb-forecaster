@@ -177,6 +177,8 @@ function buildTimeline(
   dryRate,
   maxHours,
   temp,
+  feels,
+  codes,
   ideal,
   dryCutoffs,
   tempThresholds
@@ -196,15 +198,21 @@ function buildTimeline(
     const hud = w / dryRate;
     const dry = conditionFor(hud, dryCutoffs);
     const tval = temp ? temp[i] : null;
+    const fval = feels ? feels[i] : null;
     const tempCond = ideal ? tempCondition(tval, ideal.min, ideal.max, tempThresholds) : null;
+    const feelsCond =
+      ideal && fval != null ? tempCondition(fval, ideal.min, ideal.max, tempThresholds) : null;
     out.push({
       time: times[i],
       wetness: round2(w),
       precip: round2(p),
       hoursUntilDry: round1(hud),
       temp: tval == null ? null : Math.round(tval),
+      feels: fval == null ? null : Math.round(fval),
+      code: codes ? codes[i] : null,
       dry,
       tempCond,
+      feelsCond,
       condition: worse(dry, tempCond),
     });
   }
@@ -231,6 +239,8 @@ export function computeConditions(opts) {
     times,
     precip,
     temp = null,
+    feels = null,
+    codes = null,
     now,
     drainage = "medium",
     timelineHours = 24 * 7, // cover the full week so summaries can look ahead
@@ -293,6 +303,8 @@ export function computeConditions(opts) {
       dryRate,
       timelineHours,
       temp,
+      feels,
+      codes,
       ideal,
       dryCutoffs,
       tempThresholds

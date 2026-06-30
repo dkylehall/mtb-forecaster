@@ -1,7 +1,8 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import ConditionSummary from "./ConditionSummary.vue";
 import { summarize } from "../lib/summary.js";
+import { wmo } from "../lib/weather.js";
 import { whenLabel, clock, timeLeftLabel } from "../lib/format.js";
 
 const props = defineProps({
@@ -82,17 +83,96 @@ function windowText(w) {
   return `${start} for ${durationPhrase(w.hours)} (${reasonText(w)})`;
 }
 
-const TIER_COLOR = {
-  green: "var(--green)", yellow: "var(--yellow)", orange: "var(--orange)", red: "var(--red)",
+// Concrete hex per tier (SVG gradient stops won't take CSS vars reliably).
+const TIER_HEX = {
+  green: "#5be0a0", yellow: "#ffe45c", orange: "#ffb454", red: "#ff6b6b",
 };
-function tierColor(t) {
-  return TIER_COLOR[t] || "var(--muted)";
+function tierHex(t) {
+  return TIER_HEX[t] || "#8aa0b8";
 }
-function barHeight(temp) {
-  if (temp == null) return "20%";
-  const h = Math.max(0, Math.min(1, (temp - 30) / 70));
-  return `${Math.round(20 + h * 80)}%`;
+// WMO weather code → [label, emoji] for the per-hour sky icons (sun vs shade).
+function skyEmoji(code) {
+  return code == null ? "" : wmo(code)[1];
 }
+function skyLabel(code) {
+  return code == null ? "" : wmo(code)[0];
+}
+
+// Curvy temperature sparkline geometry for one ride window's hourly `bars`.
+// Coordinate space is 0..100 wide × 0..CH_H tall; we render with
+// preserveAspectRatio="none" so it fills the row width.
+const CH_H = 46;
+const CH_PAD = 6;
+
+// Catmull-Rom → cubic-bezier, for a smooth flowing line through the points.
+function smoothPath(pts) {
+  if (!pts.length) return "";
+  if (pts.length === 1) return `M0,${pts[0].y} L100,${pts[0].y}`; // flat line
+  let d = `M${pts[0].x},${pts[0].y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+  }
+  return d;
+}
+
+// One series (actual or feels-like): smooth line, fill, and per-point gradient.
+function seriesGeom(bars, valKey, tierKey, lo, hi, withArea) {
+  const pts = bars.map((b, i) => {
+    const x = bars.length === 1 ? 50 : (i / (bars.length - 1)) * 100;
+    const v = b[valKey];
+    const ratio = v == null ? 0.5 : (v - lo) / (hi - lo);
+    const y = CH_PAD + (1 - ratio) * (CH_H - 2 * CH_PAD);
+    return { x, y };
+  });
+  const line = smoothPath(pts);
+  const last = pts[pts.length - 1];
+  const area = withArea && pts.length > 1 ? `${line} L${last.x},${CH_H} L${pts[0].x},${CH_H} Z` : "";
+  const stops = bars.map((b, i) => ({
+    offset: (bars.length === 1 ? 0 : (i / (bars.length - 1)) * 100).toFixed(1) + "%",
+    color: tierHex(b[tierKey]),
+  }));
+  return { line, area, stops };
+}
+
+function chartFor(bars, idx) {
+  // Scale to this window's combined actual+feels range (with a minimum span so
+  // a tiny wiggle isn't over-amplified) so both lines flow and stay comparable.
+  const vals = [];
+  bars.forEach((b) => {
+    if (b.temp != null) vals.push(b.temp);
+    if (b.feels != null) vals.push(b.feels);
+  });
+  let lo = vals.length ? Math.min(...vals) : 30;
+  let hi = vals.length ? Math.max(...vals) : 100;
+  const span = Math.max(hi - lo, 6);
+  const mid = (lo + hi) / 2;
+  lo = mid - span / 2;
+  hi = mid + span / 2;
+  const hasFeels = bars.some((b) => b.feels != null);
+  return {
+    actual: seriesGeom(bars, "temp", "tier", lo, hi, true),
+    feels: hasFeels ? seriesGeom(bars, "feels", "feelsTier", lo, hi, false) : null,
+    gradId: `wgrad-${idx}`,
+    feelsGradId: `wfeels-${idx}`,
+  };
+}
+
+const windowCharts = computed(() =>
+  rideWindows.value.map((w, i) => (w.bars && w.bars.length ? chartFor(w.bars, i) : null))
+);
+const hasAnyFeels = computed(() => windowCharts.value.some((c) => c && c.feels));
+
+// Which series are visible (toggled via the legend). Both on by default.
+const showActual = ref(true);
+const showFeels = ref(true);
 </script>
 
 <template>
@@ -143,18 +223,88 @@ function barHeight(temp) {
 
         <!-- Ideal ride windows -->
         <div class="windows" :class="{ none: !rideWindows.length }">
-          <div class="w-label">🚵 Ideal ride windows</div>
+          <div class="w-head">
+            <div class="w-label">🚵 Ideal ride windows</div>
+            <div v-if="rideWindows.length && hasAnyFeels" class="w-legend">
+              <button class="leg" :class="{ off: !showActual }" @click="showActual = !showActual">
+                <span class="leg-line solid"></span>Actual
+              </button>
+              <button class="leg" :class="{ off: !showFeels }" @click="showFeels = !showFeels">
+                <span class="leg-line dashed"></span>Feels like
+              </button>
+            </div>
+          </div>
           <ul v-if="rideWindows.length" class="w-list">
             <li v-for="(w, i) in rideWindows" :key="i" class="w-item">
               <div class="w-text">{{ windowText(w) }}</div>
-              <div v-if="w.bars && w.bars.length" class="w-bars">
-                <div v-for="(b, bi) in w.bars" :key="bi" class="w-bar">
-                  <span class="w-track">
-                    <span class="w-fill" :style="{ height: barHeight(b.temp), background: tierColor(b.tier) }">
-                      <span class="w-temp">{{ b.temp != null ? b.temp + "°" : "—" }}</span>
-                    </span>
+              <div v-if="windowCharts[i]" class="w-chart">
+                <div class="w-temps">
+                  <span
+                    v-for="(b, bi) in w.bars"
+                    :key="bi"
+                    class="w-t"
+                    :style="{ color: showActual ? tierHex(b.tier) : tierHex(b.feelsTier) }"
+                  ><template v-if="showActual">{{ b.temp != null ? b.temp + "°" : "—"
+                    }}<small
+                      v-if="showFeels && b.feels != null && b.feels !== b.temp"
+                      class="w-feels"
+                      :style="{ color: tierHex(b.feelsTier) }"
+                    > ({{ b.feels }}°)</small></template><template
+                    v-else-if="showFeels">{{ b.feels != null ? b.feels + "°" : "—" }}</template></span>
+                </div>
+                <svg class="w-spark" viewBox="0 0 100 46" preserveAspectRatio="none" aria-hidden="true">
+                  <defs>
+                    <linearGradient :id="windowCharts[i].gradId" x1="0" y1="0" x2="1" y2="0">
+                      <stop
+                        v-for="(s, si) in windowCharts[i].actual.stops"
+                        :key="si"
+                        :offset="s.offset"
+                        :stop-color="s.color"
+                      />
+                    </linearGradient>
+                    <linearGradient v-if="windowCharts[i].feels" :id="windowCharts[i].feelsGradId" x1="0" y1="0" x2="1" y2="0">
+                      <stop
+                        v-for="(s, si) in windowCharts[i].feels.stops"
+                        :key="si"
+                        :offset="s.offset"
+                        :stop-color="s.color"
+                      />
+                    </linearGradient>
+                  </defs>
+                  <path
+                    v-if="showActual && windowCharts[i].actual.area"
+                    :d="windowCharts[i].actual.area"
+                    :fill="`url(#${windowCharts[i].gradId})`"
+                    fill-opacity="0.16"
+                    stroke="none"
+                  />
+                  <path
+                    v-if="showActual"
+                    :d="windowCharts[i].actual.line"
+                    fill="none"
+                    :stroke="`url(#${windowCharts[i].gradId})`"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <path
+                    v-if="showFeels && windowCharts[i].feels"
+                    :d="windowCharts[i].feels.line"
+                    fill="none"
+                    :stroke="`url(#${windowCharts[i].feelsGradId})`"
+                    stroke-width="2"
+                    stroke-dasharray="4 3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    vector-effect="non-scaling-stroke"
+                  />
+                </svg>
+                <div class="w-times">
+                  <span v-for="(b, bi) in w.bars" :key="bi" class="w-time">
+                    <span v-if="b.code != null" class="w-ico" :title="skyLabel(b.code)">{{ skyEmoji(b.code) }}</span>
+                    <span class="w-clock">{{ clock(b.time) }}</span>
                   </span>
-                  <span class="w-time">{{ clock(b.time) }}</span>
                 </div>
               </div>
             </li>
@@ -196,29 +346,44 @@ function barHeight(temp) {
 .x:hover { color: var(--text); }
 
 .windows {
-  padding: 11px 13px;
-  background: rgba(91, 224, 160, 0.08);
-  border: 1px solid rgba(91, 224, 160, 0.35);
-  border-radius: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
   display: flex; flex-direction: column; gap: 8px;
 }
-.windows.none { background: rgba(255, 255, 255, 0.03); border-color: var(--line); }
+.w-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .w-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); font-weight: 650; }
+.w-legend { display: flex; gap: 6px; }
+.leg {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--card); color: var(--text);
+}
+.leg:hover { border-color: var(--accent); }
+.leg.off { color: var(--muted); opacity: 0.55; }
+.leg-line { width: 16px; height: 0; border-top: 2px solid currentColor; }
+.leg-line.dashed { border-top-style: dashed; }
 .w-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
 .w-item { display: flex; flex-direction: column; gap: 5px; }
 .w-text { font-size: 13.5px; font-weight: 650; color: var(--good); font-variant-numeric: tabular-nums; }
 .w-none { font-size: 13px; color: var(--muted); }
 
-.w-bars { display: flex; gap: 4px; align-items: flex-end; }
-.w-bar { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.w-track { width: 100%; height: 56px; display: flex; align-items: flex-end; }
-.w-fill { position: relative; width: 100%; border-radius: 4px 4px 0 0; min-height: 16px; }
-.w-temp {
-  position: absolute; top: 2px; left: 0; right: 0; text-align: center;
-  font-size: 10px; font-weight: 700; color: #0b1020;
-  font-variant-numeric: tabular-nums;
+/* Curvy temperature sparkline (replaces the old hourly bars). */
+.w-chart { display: flex; flex-direction: column; gap: 1px; }
+.w-temps, .w-times { display: flex; justify-content: space-between; gap: 2px; }
+.w-t {
+  flex: 1 1 0; min-width: 0; text-align: center; white-space: nowrap;
+  font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
-.w-time { font-size: 9px; color: var(--muted); white-space: nowrap; }
+.w-feels { font-size: 9px; font-weight: 600; }
+.w-spark { width: 100%; height: 46px; display: block; overflow: visible; }
+.w-time {
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  font-size: 9px; color: var(--muted); white-space: nowrap;
+}
+.w-ico { font-size: 12px; line-height: 1; }
+.w-clock { font-variant-numeric: tabular-nums; }
 
 .block { display: flex; flex-direction: column; gap: 6px; }
 .block.trail { border-top: 1px solid var(--line); padding-top: 12px; }
