@@ -456,7 +456,7 @@ onUnmounted(() => {
     <header>
       <div class="title">
         <h1>🚵 MTB Ride Forecaster</h1>
-        <p class="tag">Find your ideal times to ride based on recent &amp; forecast weather and trail conditions.</p>
+        <p class="tag">Find your ideal rides based on weather and trail conditions</p>
       </div>
       <div class="controls">
         <button class="refresh" title="Refresh all" @click="refreshAll">↻</button>
