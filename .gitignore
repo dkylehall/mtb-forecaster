@@ -8,3 +8,9 @@ node_modules/
 
 # Build output
 dist/
+
+# Local env (Supabase keys). The anon key is public by design, but env files
+# shouldn't be committed — set these in .env.local and in the deploy environment.
+.env
+.env.local
+.env.*.local

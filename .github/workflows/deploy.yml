@@ -32,6 +32,15 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          # Supabase config, injected at build time from repo variables (Settings
+          # → Secrets and variables → Actions → Variables). Both are public — the
+          # publishable key ships in the client bundle and RLS is what protects
+          # the data — so they're repo variables, not secrets. Absent them, the
+          # build still succeeds and the site runs anonymously (sync just stays
+          # off), so a fork or a misconfigured repo degrades gracefully.
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

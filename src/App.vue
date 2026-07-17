@@ -5,17 +5,14 @@ import AreaCard from "./components/AreaCard.vue";
 import MapPanel from "./components/MapPanel.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import AreaDetailModal from "./components/AreaDetailModal.vue";
+import AuthControls from "./components/AuthControls.vue";
 import { fetchTrailWeather } from "./lib/weather.js";
 import { computeConditions, GRADIENT_CSS } from "./lib/drying.js";
 import { DEFAULT_IDEAL, TEMP_THRESHOLDS } from "./lib/temperature.js";
-import {
-  loadAreas,
-  saveAreas,
-  addArea,
-  removeArea,
-  findExisting,
-  SEED_AREAS,
-} from "./lib/areas.js";
+import { addArea, removeArea, findExisting } from "./lib/areas.js";
+import { readLocal, writeAreas, pullAndMerge } from "./lib/store.js";
+import { writePref, pullPrefs } from "./lib/prefs.js";
+import { initAuth } from "./lib/auth.js";
 
 const IDEAL_KEY = "trail_ideal_temp_v1";
 const PRECIP_KEY = "mtb_precip_tol";
@@ -25,6 +22,8 @@ const SETTINGS_KEY = "mtb_settings_v1";
 const areas = ref([]);
 // id -> { result, error, loading }
 const conditions = reactive({});
+// Signed-in user's email, or null. Only ever set when sync is configured.
+const userEmail = ref(null);
 const mapCenter = ref({ lat: 38.2, lon: -78.7 }); // search bias, follows the map
 const showSettings = ref(false);
 
@@ -104,11 +103,7 @@ function loadSettings() {
 const settings = reactive(loadSettings());
 
 function persistSettings() {
-  try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  } catch {
-    /* ignore */
-  }
+  writePref(SETTINGS_KEY, JSON.stringify(settings));
 }
 
 function resetSettings() {
@@ -184,11 +179,7 @@ const VALID_SORTS = ["name", "conditions", "nearest"];
 const storedSort = localStorage.getItem(SORT_KEY);
 const sortBy = ref(VALID_SORTS.includes(storedSort) ? storedSort : "conditions");
 watch(sortBy, (v, old) => {
-  try {
-    localStorage.setItem(SORT_KEY, v);
-  } catch {
-    /* ignore */
-  }
+  writePref(SORT_KEY, v);
   // "Nearest" needs the user's location; request it (revert if denied).
   if (v === "nearest") {
     requestLocation(() => {
@@ -284,11 +275,7 @@ function onIdealChange() {
   if (ideal.min > ideal.max) {
     [ideal.min, ideal.max] = [ideal.max, ideal.min];
   }
-  try {
-    localStorage.setItem(IDEAL_KEY, JSON.stringify({ min: ideal.min, max: ideal.max }));
-  } catch {
-    /* ignore */
-  }
+  writePref(IDEAL_KEY, JSON.stringify({ min: ideal.min, max: ideal.max }));
   recomputeAll(); // temperature scoring only — no refetch needed
 }
 
@@ -302,11 +289,7 @@ function loadPrecipTol() {
 function onPrecipChange() {
   const v = Math.max(0, Math.min(100, Math.round(precipTol.value)));
   precipTol.value = v;
-  try {
-    localStorage.setItem(PRECIP_KEY, String(v));
-  } catch {
-    /* ignore */
-  }
+  writePref(PRECIP_KEY, String(v));
   recomputeAll(); // already-fetched precip-probability — no refetch needed
 }
 
@@ -314,11 +297,7 @@ function onPrecipChange() {
 const predictionBasis = ref(localStorage.getItem(BASIS_KEY) === "feels" ? "feels" : "temp");
 function setBasis(b) {
   predictionBasis.value = b === "feels" ? "feels" : "temp";
-  try {
-    localStorage.setItem(BASIS_KEY, predictionBasis.value);
-  } catch {
-    /* ignore */
-  }
+  writePref(BASIS_KEY, predictionBasis.value);
   recomputeAll();
 }
 
@@ -339,7 +318,7 @@ function onDocClick(e) {
 }
 
 function persist() {
-  saveAreas(areas.value);
+  writeAreas(areas.value);
 }
 
 // Recompute conditions from already-fetched weather (e.g. ideal-temp changed).
@@ -429,14 +408,38 @@ function onRemove(id) {
   persist();
 }
 
-onMounted(() => {
-  let saved = loadAreas();
-  if (!saved.length) {
-    // First run: seed with the example areas.
-    saved = SEED_AREAS.reduce((acc, a) => addArea(acc, a), []);
-    saveAreas(saved);
+// Re-read preferences from localStorage into reactive state. Called after a
+// sign-in pull writes the account's prefs locally, so a device picks up the
+// settings saved elsewhere without a page reload. Reassigns each reactive holder
+// through its own loader — the loaders are the single source of parsing truth.
+function hydratePrefsFromLocal() {
+  Object.assign(settings, loadSettings());
+  Object.assign(ideal, loadIdeal());
+  precipTol.value = loadPrecipTol();
+  predictionBasis.value = localStorage.getItem(BASIS_KEY) === "feels" ? "feels" : "temp";
+  const s = localStorage.getItem(SORT_KEY);
+  if (VALID_SORTS.includes(s)) sortBy.value = s;
+  restartAutoRefresh();
+  recomputeAll();
+}
+
+// Sign-in bootstrap. Inert unless Supabase env vars are set (see lib/auth.js):
+// with none, this returns immediately and the app stays 100% local. With them,
+// it pulls the account's areas + prefs on sign-in and re-hydrates reactive state.
+async function onAuthSync() {
+  const changed = await pullPrefs();
+  if (changed && changed.length) hydratePrefsFromLocal();
+  const merged = await pullAndMerge(areas.value);
+  if (merged) {
+    areas.value = merged;
+    refreshAll();
   }
-  areas.value = saved;
+}
+
+onMounted(() => {
+  // Local read only — instant, and correct for anonymous use. If a session
+  // resolves later, onAuthSync() layers the account's data on top.
+  areas.value = readLocal();
   refreshAll();
   restartAutoRefresh();
   // If "nearest" was the last-used sort, the watcher won't fire on load, so
@@ -447,6 +450,13 @@ onMounted(() => {
     });
   }
   document.addEventListener("click", onDocClick);
+  // Wire auth only if configured; no-op otherwise (keeps anonymous use pristine).
+  initAuth({
+    onSignedIn: onAuthSync,
+    onChange: (session) => {
+      userEmail.value = session?.user?.email || null;
+    },
+  });
 });
 
 onUnmounted(() => {
@@ -463,6 +473,7 @@ onUnmounted(() => {
         <p class="tag">Find your ideal rides based on weather and trail conditions</p>
       </div>
       <div class="controls">
+        <AuthControls :email="userEmail" />
         <button class="refresh" title="Refresh all" @click="refreshAll">↻</button>
         <button class="refresh" title="Settings" @click="showSettings = true">⚙</button>
       </div>
