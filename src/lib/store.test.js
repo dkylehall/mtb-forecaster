@@ -33,4 +33,13 @@ describe("mergeAreas", () => {
     const merged = mergeAreas([], [cville, snowshoe]);
     expect(merged).toHaveLength(2);
   });
+
+  it("collapses duplicates already present in the device's own list", () => {
+    // A list that somehow picked up two pins for one spot must be able to heal:
+    // folding only `incoming` would leave these untouched forever.
+    const nudged = { ...cville, lat: cville.lat + 0.001, name: "Cville dupe" };
+    const merged = mergeAreas([cville, nudged], []);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].name).toBe("Charlottesville"); // first one wins
+  });
 });

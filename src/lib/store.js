@@ -30,11 +30,15 @@ export function isSynced() {
 }
 
 /**
- * Union two lists. addArea already drops any pin within ~1,000 ft of one it
- * already holds, so a fold does the whole job.
+ * Union two lists. addArea drops any pin within ~1,000 ft of one already held,
+ * so a fold does the whole job — but fold BOTH sides through it, not just
+ * `incoming`. Using `base` as the seed accumulator leaves any duplicates
+ * already in it untouched, so a list that once picked up dupes could never heal
+ * itself. Starting empty normalises both sides; earlier entries win, so this
+ * device's naming survives a merge.
  */
 export function mergeAreas(base, incoming) {
-  return incoming.reduce((acc, a) => addArea(acc, a), base);
+  return [...base, ...incoming].reduce((acc, a) => addArea(acc, a), []);
 }
 
 /**
@@ -48,10 +52,22 @@ export function mergeAreas(base, incoming) {
  */
 export function readLocal({ seed = true } = {}) {
   const saved = loadAreas();
-  if (saved.length || !seed) return saved;
+  if (saved.length || !seed) {
+    justSeeded = false;
+    return saved;
+  }
   const seeded = SEED_AREAS.reduce((acc, a) => addArea(acc, a), []);
   saveAreas(seeded);
+  justSeeded = true;
   return seeded;
+}
+
+// Whether this load populated the board from SEED_AREAS rather than the user's
+// own saved pins. A session only resolves after first paint, so we can't know to
+// skip seeding up front — we record it and let pullAndMerge decide.
+let justSeeded = false;
+export function isSeedOnly() {
+  return justSeeded;
 }
 
 /**
@@ -62,6 +78,17 @@ export function readLocal({ seed = true } = {}) {
 export async function pullAndMerge(local) {
   if (!remote) return null;
   const theirs = await remote.list();
+  // This device is showing nothing but the first-run examples and the account
+  // already has real pins: adopt the account's list rather than merging the
+  // examples in and pushing them up. Otherwise every new device — and every
+  // separate origin, since localhost and the deployed domain don't share
+  // localStorage — permanently adds the seeds to the account.
+  if (isSeedOnly() && theirs.length) {
+    const adopted = mergeAreas([], theirs);
+    saveAreas(adopted);
+    justSeeded = false;
+    return adopted;
+  }
   const merged = mergeAreas(local, theirs);
   // The device had pins the account didn't: push the union back up.
   if (merged.length !== theirs.length) await remote.replace(merged);
