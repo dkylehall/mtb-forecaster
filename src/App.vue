@@ -4,10 +4,11 @@ import AddArea from "./components/AddArea.vue";
 import AreaCard from "./components/AreaCard.vue";
 import MapPanel from "./components/MapPanel.vue";
 import SettingsModal from "./components/SettingsModal.vue";
+import TempTiersModal from "./components/TempTiersModal.vue";
 import AreaDetailModal from "./components/AreaDetailModal.vue";
 import AuthControls from "./components/AuthControls.vue";
-import { fetchTrailWeather } from "./lib/weather.js";
-import { computeConditions, GRADIENT_CSS } from "./lib/drying.js";
+import { fetchTrailWeather, fetchAirQuality, aqiCategory, aqiColor } from "./lib/weather.js";
+import { computeConditions } from "./lib/drying.js";
 import { DEFAULT_IDEAL, TEMP_THRESHOLDS } from "./lib/temperature.js";
 import { addArea, removeArea, findExisting } from "./lib/areas.js";
 import { readLocal, writeAreas, pullAndMerge } from "./lib/store.js";
@@ -16,7 +17,10 @@ import { initAuth } from "./lib/auth.js";
 
 const IDEAL_KEY = "trail_ideal_temp_v1";
 const PRECIP_KEY = "mtb_precip_tol";
+const AQI_KEY = "mtb_aqi_limit";
 const BASIS_KEY = "mtb_basis";
+const ENABLED_KEY = "mtb_params_enabled";
+const AREA_HOURS_KEY = "mtb_area_hours";
 const SETTINGS_KEY = "mtb_settings_v1";
 
 const areas = ref([]);
@@ -26,6 +30,7 @@ const conditions = reactive({});
 const userEmail = ref(null);
 const mapCenter = ref({ lat: 38.2, lon: -78.7 }); // search bias, follows the map
 const showSettings = ref(false);
+const showTiers = ref(false); // the "Customize" tier editor
 
 // Which area's detail modal is open (id, or null).
 const detailId = ref(null);
@@ -128,17 +133,6 @@ const tempLabels = computed(() => ({
   orange: settings.temp.orange.label.toLowerCase(),
   red: settings.temp.red.label.toLowerCase(),
 }));
-
-// Legend rows, derived reactively from the current settings.
-const degLabel = (hot, cold) => (hot === cold ? `±${hot}°` : `+${hot}°/−${cold}°`);
-const ridingKey = computed(() => [
-  { color: "var(--green)", label: settings.temp.green.label, note: "" },
-  { color: "var(--yellow)", label: settings.temp.yellow.label, note: degLabel(settings.temp.yellow.hot, settings.temp.yellow.cold) },
-  { color: "var(--orange)", label: settings.temp.orange.label, note: degLabel(settings.temp.orange.hot, settings.temp.orange.cold) },
-  { color: "var(--red)", label: settings.temp.red.label, note: degLabel(settings.temp.red.hot, settings.temp.red.cold) },
-]);
-// Trail dryness is shown as a continuous drying-time gradient (dry → soaked).
-const gradientCss = `linear-gradient(90deg, ${GRADIENT_CSS.join(", ")})`;
 
 // React to settings changes: lookback needs a refetch; temp/dry only recompute.
 watch(() => settings.lookbackDays, () => {
@@ -301,12 +295,101 @@ function setBasis(b) {
   recomputeAll();
 }
 
+// Air-quality ceiling, on the US AQI scale the API reports (0–500).
+const aqiLimit = ref(loadAqiLimit());
+function loadAqiLimit() {
+  const v = parseInt(localStorage.getItem(AQI_KEY), 10);
+  return v >= 0 && v <= 500 ? v : 100;
+}
+function onAqiChange() {
+  const v = Math.max(0, Math.min(500, Math.round(aqiLimit.value)));
+  aqiLimit.value = v;
+  writePref(AQI_KEY, String(v));
+  recomputeAll();
+}
+const aqiLimitLabel = computed(() => aqiCategory(aqiLimit.value));
+
+// Which parameters take part in scoring. Unchecking one drops it entirely.
+const DEFAULT_ENABLED = { temp: true, precip: true, aqi: true, dry: true };
+const enabledParams = reactive(loadEnabled());
+function loadEnabled() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ENABLED_KEY));
+    if (v && typeof v === "object") {
+      return {
+        temp: v.temp !== false,
+        precip: v.precip !== false,
+        aqi: v.aqi !== false,
+        dry: v.dry !== false,
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  return { ...DEFAULT_ENABLED };
+}
+function onEnabledChange() {
+  writePref(ENABLED_KEY, JSON.stringify({ ...enabledParams }));
+  recomputeAll();
+}
+const activeParamCount = computed(
+  () => Object.values(enabledParams).filter(Boolean).length
+);
+
+// Per-area operating hours, {areaId: {open: "10:00", close: "18:00"}}. Kept in
+// the synced prefs blob rather than on the area itself, so it needs no change
+// to the remote areas table. An empty/absent entry means "use daylight".
+const areaHours = reactive(loadAreaHours());
+function loadAreaHours() {
+  try {
+    const v = JSON.parse(localStorage.getItem(AREA_HOURS_KEY));
+    if (v && typeof v === "object" && !Array.isArray(v)) return v;
+  } catch {
+    /* fall through */
+  }
+  return {};
+}
+function setAreaHours(id, hours) {
+  if (hours && hours.open && hours.close) areaHours[id] = { ...hours };
+  else delete areaHours[id];
+  writePref(AREA_HOURS_KEY, JSON.stringify({ ...areaHours }));
+}
+// Drop hours whose area is gone — e.g. deleted on another device, then pulled
+// down here. Guarded on a non-empty list so a not-yet-loaded board can't wipe
+// entries wholesale.
+function pruneAreaHours() {
+  if (!areas.value.length) return;
+  const live = new Set(areas.value.map((a) => a.id));
+  const stale = Object.keys(areaHours).filter((id) => !live.has(id));
+  if (!stale.length) return;
+  for (const id of stale) delete areaHours[id];
+  writePref(AREA_HOURS_KEY, JSON.stringify({ ...areaHours }));
+}
+
+// Collapsed/expanded state of the parameters card. Device-local UI state, so
+// it's plain localStorage rather than a synced preference — you might want it
+// collapsed on a phone and open on a laptop.
+const PARAMS_OPEN_KEY = "mtb_params_open";
+const paramsOpen = ref(localStorage.getItem(PARAMS_OPEN_KEY) !== "0");
+function toggleParams() {
+  paramsOpen.value = !paramsOpen.value;
+  try {
+    localStorage.setItem(PARAMS_OPEN_KEY, paramsOpen.value ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
 // Info popovers for the scoring controls.
 const activeInfo = ref(null);
 const INFO = {
   temp: "The air-temperature range you most enjoy riding in. Hours inside this band score as ideal; the further outside, the worse — with separate tolerances for hotter vs. colder.",
   precip:
     "The highest chance of precipitation you'll put up with. Any forecast hour whose rain/snow chance is above this is treated as unfavorable and dropped from your ride windows.",
+  aqi:
+    "The highest air-quality index you'll still ride in, on the US AQI scale (0–500) the air-quality API reports — set 160 and you'll ride at 160 or lower. Hours above it are treated as unfavorable. 50 = Good, 100 = Moderate, 150 = unhealthy for sensitive groups.",
+  dry:
+    "Whether trail wetness counts. Dryness is estimated from recent rain and the area's soil drainage — roughly a day of drying per inch of rain.",
   basis:
     "Whether ride windows are judged by the actual air temperature or the “feels like” temperature (which factors in humidity and wind). “Feels like” is usually stricter in humid heat.",
 };
@@ -321,6 +404,18 @@ function persist() {
   writeAreas(areas.value);
 }
 
+// The air-quality API has its own (shorter) hourly series, so line it up with
+// the weather timestamps; hours it doesn't cover stay null and simply don't
+// constrain scoring.
+function alignAqi(times, aq) {
+  const t = aq?.hourly?.time;
+  const v = aq?.hourly?.us_aqi;
+  if (!t || !v) return null;
+  const byTime = new Map();
+  for (let i = 0; i < t.length; i++) byTime.set(t[i], v[i]);
+  return times.map((iso) => (byTime.has(iso) ? byTime.get(iso) : null));
+}
+
 // Recompute conditions from already-fetched weather (e.g. ideal-temp changed).
 function recompute(area) {
   const c = conditions[area.id];
@@ -333,12 +428,15 @@ function recompute(area) {
     codes: c.wx.hourly.weather_code,
     precipProb: c.wx.hourly.precipitation_probability,
     rh: c.wx.hourly.relative_humidity_2m,
+    aqi: alignAqi(c.wx.hourly.time, c.aq),
     now: new Date(),
     drainage: area.drainage,
     idealTempMin: ideal.min,
     idealTempMax: ideal.max,
     precipTolerance: precipTol.value,
+    aqiLimit: aqiLimit.value,
     basis: predictionBasis.value,
+    enabled: { ...enabledParams },
     tempThresholds: tempThresholds(),
     daily: c.wx.daily,
   });
@@ -361,12 +459,18 @@ async function refreshArea(area, attempt = 0) {
   clearRetry(area.id);
   const prev = conditions[area.id] || {};
   // Keep showing any prior data while (re)loading.
-  conditions[area.id] = { result: prev.result || null, error: "", loading: true, wx: prev.wx || null };
+  conditions[area.id] = {
+    result: prev.result || null, error: "", loading: true,
+    wx: prev.wx || null, aq: prev.aq || null,
+  };
   try {
-    const wx = await fetchTrailWeather(area.lat, area.lon, {
-      pastDays: settings.lookbackDays,
-    });
-    conditions[area.id] = { result: null, error: "", loading: false, wx };
+    // Air quality is a separate endpoint and strictly optional — if it fails,
+    // the card still loads and AQI simply doesn't constrain scoring.
+    const [wx, aq] = await Promise.all([
+      fetchTrailWeather(area.lat, area.lon, { pastDays: settings.lookbackDays }),
+      fetchAirQuality(area.lat, area.lon, { pastDays: settings.lookbackDays }).catch(() => null),
+    ]);
+    conditions[area.id] = { result: null, error: "", loading: false, wx, aq };
     recompute(area); // fills .result using the current ideal band
   } catch (e) {
     // Don't retry an area that's since been removed.
@@ -378,6 +482,7 @@ async function refreshArea(area, attempt = 0) {
       error: `${e.message || "Couldn't load weather"} — retrying…`,
       loading: false,
       wx: prev.wx || null,
+      aq: prev.aq || null,
     };
     retryTimers[area.id] = setTimeout(() => refreshArea(area, attempt + 1), delay);
   }
@@ -405,6 +510,9 @@ function onRemove(id) {
   if (detailId.value === id) detailId.value = null;
   areas.value = removeArea(areas.value, id);
   delete conditions[id];
+  // Drop this area's operating hours too. Area ids are derived from lat/lon, so
+  // leaving them would silently resurrect old hours if the same spot is re-added.
+  setAreaHours(id, null);
   persist();
 }
 
@@ -416,6 +524,10 @@ function hydratePrefsFromLocal() {
   Object.assign(settings, loadSettings());
   Object.assign(ideal, loadIdeal());
   precipTol.value = loadPrecipTol();
+  aqiLimit.value = loadAqiLimit();
+  Object.assign(enabledParams, loadEnabled());
+  for (const k of Object.keys(areaHours)) delete areaHours[k];
+  Object.assign(areaHours, loadAreaHours());
   predictionBasis.value = localStorage.getItem(BASIS_KEY) === "feels" ? "feels" : "temp";
   const s = localStorage.getItem(SORT_KEY);
   if (VALID_SORTS.includes(s)) sortBy.value = s;
@@ -434,12 +546,14 @@ async function onAuthSync() {
     areas.value = merged;
     refreshAll();
   }
+  pruneAreaHours();
 }
 
 onMounted(() => {
   // Local read only — instant, and correct for anonymous use. If a session
   // resolves later, onAuthSync() layers the account's data on top.
   areas.value = readLocal();
+  pruneAreaHours();
   refreshAll();
   restartAutoRefresh();
   // If "nearest" was the last-used sort, the watcher won't fire on load, so
@@ -480,71 +594,118 @@ onUnmounted(() => {
     </header>
 
     <div class="settings">
-      <div class="setting">
-        <label>Ideal riding temp</label>
+      <button class="s-head" :aria-expanded="paramsOpen" @click="toggleParams">
+        <span class="s-chevron">{{ paramsOpen ? "▾" : "▸" }}</span>
+        Forecast parameters
+        <span v-if="!paramsOpen" class="s-summary">{{ activeParamCount }} of 4 on</span>
+      </button>
+
+      <div v-show="paramsOpen" class="s-body">
+      <!-- Temperature -->
+      <div class="setting" :class="{ off: !enabledParams.temp }">
+        <label class="s-check">
+          <input type="checkbox" v-model="enabledParams.temp" @change="onEnabledChange" />
+          <span class="s-name">Ideal riding temp</span>
+        </label>
         <button class="info" title="What is this?" @click.stop="toggleInfo('temp')">ⓘ</button>
-        <input
-          class="num"
-          type="number"
-          min="0"
-          max="120"
-          step="1"
-          v-model.number="ideal.min"
-          @change="onIdealChange"
-        />
-        <span class="dash">–</span>
-        <input
-          class="num"
-          type="number"
-          min="0"
-          max="120"
-          step="1"
-          v-model.number="ideal.max"
-          @change="onIdealChange"
-        />
-        <span class="val">°F</span>
+        <div class="s-control">
+          <input
+            class="num"
+            type="number"
+            min="0"
+            max="120"
+            step="1"
+            :disabled="!enabledParams.temp"
+            v-model.number="ideal.min"
+            @change="onIdealChange"
+          />
+          <span class="dash">–</span>
+          <input
+            class="num"
+            type="number"
+            min="0"
+            max="120"
+            step="1"
+            :disabled="!enabledParams.temp"
+            v-model.number="ideal.max"
+            @change="onIdealChange"
+          />
+          <span class="val">°F</span>
+          <button class="s-link" :disabled="!enabledParams.temp" @click="showTiers = true">Customize</button>
+          <span class="seg s-basis">
+            <button
+              :class="{ on: predictionBasis === 'temp' }"
+              :disabled="!enabledParams.temp"
+              @click="setBasis('temp')"
+            >Temp</button>
+            <button
+              :class="{ on: predictionBasis === 'feels' }"
+              :disabled="!enabledParams.temp"
+              @click="setBasis('feels')"
+            >Feels like</button>
+          </span>
+          <button class="info" title="About prediction basis" @click.stop="toggleInfo('basis')">ⓘ</button>
+        </div>
         <div v-if="activeInfo === 'temp'" class="info-pop">{{ INFO.temp }}</div>
+        <div v-if="activeInfo === 'basis'" class="info-pop">{{ INFO.basis }}</div>
       </div>
 
-      <div class="setting">
-        <label>Precip % tolerance</label>
+      <!-- Precipitation chance -->
+      <div class="setting" :class="{ off: !enabledParams.precip }">
+        <label class="s-check">
+          <input type="checkbox" v-model="enabledParams.precip" @change="onEnabledChange" />
+          <span class="s-name">Precip % tolerance</span>
+        </label>
         <button class="info" title="What is this?" @click.stop="toggleInfo('precip')">ⓘ</button>
-        <input
-          type="range"
-          min="0"
-          max="100"
-          step="5"
-          v-model.number="precipTol"
-          @change="onPrecipChange"
-        />
-        <span class="val">{{ precipTol }}%</span>
+        <div class="s-control">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            :disabled="!enabledParams.precip"
+            v-model.number="precipTol"
+            @change="onPrecipChange"
+          />
+          <span class="val">{{ precipTol }}%</span>
+        </div>
         <div v-if="activeInfo === 'precip'" class="info-pop">{{ INFO.precip }}</div>
       </div>
 
-      <div class="setting">
-        <label>Prediction basis</label>
-        <button class="info" title="What is this?" @click.stop="toggleInfo('basis')">ⓘ</button>
-        <div class="seg">
-          <button :class="{ on: predictionBasis === 'temp' }" @click="setBasis('temp')">Temp</button>
-          <button :class="{ on: predictionBasis === 'feels' }" @click="setBasis('feels')">Feels like</button>
+      <!-- Air quality -->
+      <div class="setting" :class="{ off: !enabledParams.aqi }">
+        <label class="s-check">
+          <input type="checkbox" v-model="enabledParams.aqi" @change="onEnabledChange" />
+          <span class="s-name">Air quality (max AQI)</span>
+        </label>
+        <button class="info" title="What is this?" @click.stop="toggleInfo('aqi')">ⓘ</button>
+        <div class="s-control">
+          <input
+            type="range"
+            min="0"
+            max="500"
+            step="10"
+            :disabled="!enabledParams.aqi"
+            v-model.number="aqiLimit"
+            @change="onAqiChange"
+          />
+          <span class="val" :style="{ color: aqiColor(aqiLimit) }">≤ {{ aqiLimit }}<small class="aqi-cat"> · {{ aqiLimitLabel }}</small></span>
         </div>
-        <div v-if="activeInfo === 'basis'" class="info-pop">{{ INFO.basis }}</div>
+        <div v-if="activeInfo === 'aqi'" class="info-pop">{{ INFO.aqi }}</div>
       </div>
-    </div>
 
-    <div class="key">
-      <div class="key-row">
-        <span class="key-title">Riding conditions</span>
-        <span v-for="t in ridingKey" :key="t.label" class="k">
-          <i class="sw" :style="{ background: t.color }"></i>
-          {{ t.label }} <small v-if="t.note">({{ t.note }})</small>
-        </span>
+      <!-- Trail dryness -->
+      <div class="setting" :class="{ off: !enabledParams.dry }">
+        <label class="s-check">
+          <input type="checkbox" v-model="enabledParams.dry" @change="onEnabledChange" />
+          <span class="s-name">Trail dryness</span>
+        </label>
+        <button class="info" title="What is this?" @click.stop="toggleInfo('dry')">ⓘ</button>
+        <div class="s-control">
+          <span class="val muted-note">Estimated from recent rain &amp; soil drainage</span>
+        </div>
+        <div v-if="activeInfo === 'dry'" class="info-pop">{{ INFO.dry }}</div>
       </div>
-      <div class="key-row">
-        <span class="key-title">Trail conditions</span>
-        <span class="k">Dry</span>
-        <span class="grad-bar" :style="{ background: gradientCss }"></span>
-        <span class="k">Soaked</span>
       </div>
     </div>
 
@@ -594,6 +755,13 @@ onUnmounted(() => {
       OpenStreetMap. Estimates only — your local trail may vary.
     </footer>
 
+    <TempTiersModal
+      v-if="showTiers"
+      :settings="settings"
+      :ideal="ideal"
+      @close="showTiers = false"
+    />
+
     <SettingsModal
       v-if="showSettings"
       :settings="settings"
@@ -610,6 +778,8 @@ onUnmounted(() => {
       :error="conditions[detailArea.id] ? conditions[detailArea.id].error : ''"
       :max-windows="settings.maxWindows"
       :temp-labels="tempLabels"
+      :hours="areaHours[detailArea.id] || null"
+      @set-hours="setAreaHours(detailArea.id, $event)"
       @close="detailId = null"
     />
   </div>
@@ -635,14 +805,51 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
 .refresh { font-size: 16px; padding: 8px 12px; }
 
 .settings {
-  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
-  margin-bottom: 16px; padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 2px;
+  margin-bottom: 16px; padding: 12px 14px;
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
 }
-.setting { display: flex; align-items: center; gap: 8px; position: relative; }
-.setting label {
-  text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px; color: var(--muted);
+.s-head {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 0; border: none; background: transparent; cursor: pointer; text-align: left;
+  text-transform: uppercase; letter-spacing: 0.7px; font-size: 10px;
+  color: var(--muted); font-weight: 650;
 }
+.s-head:hover { color: var(--text); }
+.s-chevron { font-size: 9px; line-height: 1; }
+.s-summary {
+  margin-left: auto; text-transform: none; letter-spacing: 0;
+  font-size: 11px; font-weight: 500;
+}
+.s-body { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+/* One row per scoring parameter: [checkbox + name] [ⓘ] [control] */
+.setting {
+  display: flex; align-items: center; gap: 8px; position: relative;
+  padding: 5px 0; flex-wrap: wrap;
+}
+.setting.off { opacity: 0.5; }
+.s-check {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  flex: 0 0 190px; min-width: 0;
+}
+.s-check input[type="checkbox"] {
+  width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex: 0 0 auto;
+}
+.s-name {
+  text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px; color: var(--muted);
+  white-space: nowrap;
+}
+.s-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.s-basis { margin-left: 6px; }
+.aqi-cat { color: var(--muted); font-weight: 400; }
+.s-link {
+  border: none; background: transparent; padding: 0 2px; cursor: pointer;
+  color: var(--accent); font-size: 12px; text-decoration: underline;
+}
+.s-link:hover { color: var(--text); }
+.s-link:disabled { color: var(--muted); text-decoration: none; cursor: default; }
+.muted-note { color: var(--muted); font-size: 12px; }
+.setting input:disabled, .setting button:disabled { opacity: 0.6; cursor: default; }
 .info {
   flex: 0 0 auto; border: none; background: transparent; color: var(--muted);
   font-size: 13px; line-height: 1; padding: 0; cursor: pointer; margin-left: -4px;
@@ -670,26 +877,6 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
 }
 .setting .dash { color: var(--muted); }
 .val { color: var(--text); font-variant-numeric: tabular-nums; font-size: 12.5px; }
-
-.key {
-  display: flex; flex-direction: column; gap: 6px;
-  margin-bottom: 16px; padding: 10px 14px;
-  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-}
-.key-row { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; }
-.key-title {
-  flex: 0 0 140px; white-space: nowrap;
-  text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px;
-  color: var(--muted); font-weight: 650;
-}
-.k { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; white-space: nowrap; }
-.k small { color: var(--muted); }
-.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: 0 0 auto; }
-/* Trail dryness legend: a continuous green→red drying-time gradient. */
-.grad-bar {
-  flex: 1 1 auto; max-width: 360px; height: 10px; border-radius: 5px;
-  border: 1px solid var(--line);
-}
 
 .layout {
   display: grid;
@@ -742,10 +929,9 @@ footer {
   .board { overflow: visible; padding-right: 0; }
 }
 
-/* Narrow screens: let the legend rows wrap instead of crushing the swatches. */
+/* Narrow screens: let each parameter's control wrap under its name. */
 @media (max-width: 560px) {
-  .key-row { flex-wrap: wrap; gap: 6px 14px; }
-  .key-title { flex-basis: 100%; }
-  .grad-bar { max-width: none; }
+  .s-check { flex-basis: 100%; }
+  .info-pop { width: min(260px, 78vw); }
 }
 </style>

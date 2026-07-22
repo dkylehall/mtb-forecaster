@@ -53,8 +53,17 @@ describe("snapshotPrefs / applyPrefs", () => {
     expect(localStorage.getItem("mtb_sort")).toBe("name");
   });
 
-  it("only knows the five documented keys", () => {
-    expect(PREF_KEYS).toHaveLength(5);
+  it("only knows the documented keys", () => {
+    expect(PREF_KEYS).toEqual([
+      "mtb_settings_v1",
+      "trail_ideal_temp_v1",
+      "mtb_precip_tol",
+      "mtb_aqi_limit",
+      "mtb_params_enabled",
+      "mtb_area_hours",
+      "mtb_basis",
+      "mtb_sort",
+    ]);
   });
 });
 

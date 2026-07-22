@@ -6,6 +6,7 @@
 
 const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 const GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
+const AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality";
 
 /**
  * Search for a place by name (city-level). Returns up to `count` matches.
@@ -62,6 +63,50 @@ export async function fetchTrailWeather(lat, lon, opts = {}) {
   const res = await fetch(`${FORECAST_URL}?${params}`);
   if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
   return res.json();
+}
+
+/**
+ * Hourly US AQI for a point, from Open-Meteo's separate air-quality API.
+ * Its forecast horizon is shorter than the weather API's, so callers should
+ * align by timestamp and tolerate missing hours.
+ * @returns {Promise<{hourly: {time: string[], us_aqi: number[]}}>}
+ */
+export async function fetchAirQuality(lat, lon, opts = {}) {
+  const { pastDays = 3, forecastDays = 7 } = opts;
+  const params = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lon),
+    hourly: "us_aqi",
+    timezone: "auto",
+    past_days: String(pastDays),
+    forecast_days: String(forecastDays),
+  });
+  const res = await fetch(`${AIR_QUALITY_URL}?${params}`);
+  if (!res.ok) throw new Error(`Air-quality fetch failed (${res.status})`);
+  return res.json();
+}
+
+// US AQI category for a value (matches the EPA breakpoints the API uses).
+export function aqiCategory(v) {
+  if (v == null) return "";
+  if (v <= 50) return "Good";
+  if (v <= 100) return "Moderate";
+  if (v <= 150) return "Unhealthy for sensitive groups";
+  if (v <= 200) return "Unhealthy";
+  if (v <= 300) return "Very unhealthy";
+  return "Hazardous";
+}
+
+// Colour for each of the six AQI levels. Concrete hex (not CSS vars) so the
+// pink/purple steps — which have no tier variable — stay in one place.
+export function aqiColor(v) {
+  if (v == null) return "var(--muted)";
+  if (v <= 50) return "#5be0a0"; // Good
+  if (v <= 100) return "#ffe45c"; // Moderate
+  if (v <= 150) return "#ffb454"; // Unhealthy for sensitive groups
+  if (v <= 200) return "#ff8ac4"; // Unhealthy
+  if (v <= 300) return "#ff6b6b"; // Very unhealthy
+  return "#a06bff"; // Hazardous
 }
 
 // Minimal WMO weather-code → label/emoji map (shared look with the legacy app).

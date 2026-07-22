@@ -87,8 +87,13 @@ export function worse(a, b) {
 // Applied when an hour's precipitation chance exceeds the rider's tolerance —
 // makes the hour unfavorable (red) regardless of temp/dryness.
 const RAIN_TIER = { key: "red", label: "Rain likely", color: "var(--red)", severity: 3 };
+const AQI_TIER = { key: "red", label: "Poor air quality", color: "var(--red)", severity: 3 };
+// An hour is unfavorable when a measured value exceeds the rider's limit.
+function limitCondition(value, limit, tier) {
+  return value != null && limit != null && value > limit ? tier : null;
+}
 function precipCondition(prob, tolerance) {
-  return prob != null && tolerance != null && prob > tolerance ? RAIN_TIER : null;
+  return limitCondition(prob, tolerance, RAIN_TIER);
 }
 
 // Drying rate in inches/hour for a given drainage factor.
@@ -186,24 +191,13 @@ function tempDir(t, ideal) {
  * @returns {Array<{ time, wetness, precip, hoursUntilDry, temp,
  *                   dry: object, tempCond: object, condition: object }>}
  */
-function buildTimeline(
-  times,
-  precip,
-  nowMs,
-  startWetness,
-  dryRate,
-  maxHours,
-  temp,
-  feels,
-  codes,
-  precipProb,
-  rh,
-  precipTolerance,
-  basis,
-  ideal,
-  dryCutoffs,
-  tempThresholds
-) {
+function buildTimeline(o) {
+  const {
+    times, precip, nowMs, startWetness, dryRate, maxHours,
+    temp, feels, codes, precipProb, rh, aqi,
+    precipTolerance, aqiLimit, basis, enabled,
+    ideal, dryCutoffs, tempThresholds,
+  } = o;
   const out = [];
   let w = startWetness;
   const startIdx = indexAtOrBefore(times, nowMs);
@@ -224,9 +218,14 @@ function buildTimeline(
     const feelsCond =
       ideal && fval != null ? tempCondition(fval, ideal.min, ideal.max, tempThresholds) : null;
     const pp = precipProb && precipProb[i] != null ? precipProb[i] : null;
-    const precipCond = precipCondition(pp, precipTolerance);
+    const av = aqi && aqi[i] != null ? aqi[i] : null;
     // Ride windows are scored against either actual temp or "feels like".
     const primaryCond = basis === "feels" && feelsCond ? feelsCond : tempCond;
+    // Only the enabled parameters contribute to the combined condition.
+    const dryPart = enabled.dry ? dry : null;
+    const tempPart = enabled.temp ? primaryCond : null;
+    const precipPart = enabled.precip ? precipCondition(pp, precipTolerance) : null;
+    const aqiPart = enabled.aqi ? limitCondition(av, aqiLimit, AQI_TIER) : null;
     out.push({
       time: times[i],
       wetness: round2(w),
@@ -239,13 +238,16 @@ function buildTimeline(
       code: codes ? codes[i] : null,
       precipProb: precipProb && precipProb[i] != null ? Math.round(precipProb[i]) : null,
       rh: rh && rh[i] != null ? Math.round(rh[i]) : null,
+      aqi: av == null ? null : Math.round(av),
       dry,
       tempCond,
       feelsCond,
       // Why an hour is non-green (for the "no ideal window" reasons).
-      tempBad: !!(primaryCond && primaryCond.key !== "green"),
-      precipBad: precipCond != null,
-      condition: worse(worse(dry, primaryCond), precipCond),
+      tempBad: !!tempPart && tempPart.key !== "green",
+      precipBad: precipPart != null,
+      aqiBad: aqiPart != null,
+      dryBad: !!dryPart && dryPart.key !== "green",
+      condition: worse(worse(worse(dryPart, tempPart), precipPart), aqiPart) || TIER.green,
     });
   }
   return out;
@@ -275,8 +277,12 @@ export function computeConditions(opts) {
     codes = null,
     precipProb = null,
     rh = null,
+    aqi = null, // hourly US AQI, aligned to `times`
     precipTolerance = 100, // % chance above which precip makes an hour unfavorable
+    aqiLimit = 500, // US AQI above which an hour is unfavorable
     basis = "temp", // "temp" | "feels" — which temperature scores ride windows
+    // Which parameters take part in scoring; a disabled one is ignored entirely.
+    enabled = { temp: true, precip: true, aqi: false, dry: true },
     now,
     drainage = "medium",
     timelineHours = 24 * 7, // cover the full week so summaries can look ahead
@@ -324,7 +330,16 @@ export function computeConditions(opts) {
     ideal && feelsNow != null ? tempCondition(feelsNow, ideal.min, ideal.max, tempThresholds) : null;
   const primaryCondNow = basis === "feels" && feelsCondNow ? feelsCondNow : tempCond;
   const precipNow = precipProb && precipProb[upTo] != null ? precipProb[upTo] : null;
-  const precipCondNow = precipCondition(precipNow, precipTolerance);
+  const aqiNow = aqi && aqi[upTo] != null ? aqi[upTo] : null;
+  // Only enabled parameters feed the headline, same as the timeline.
+  const headline =
+    worse(
+      worse(
+        worse(enabled.dry ? dryCond : null, enabled.temp ? primaryCondNow : null),
+        enabled.precip ? precipCondition(precipNow, precipTolerance) : null
+      ),
+      enabled.aqi ? limitCondition(aqiNow, aqiLimit, AQI_TIER) : null
+    ) || TIER.green;
 
   return {
     wetness: round2(wetness),
@@ -334,27 +349,16 @@ export function computeConditions(opts) {
     dryCondition: dryCond,
     tempNow: tempNow == null ? null : Math.round(tempNow),
     tempCondition: tempCond,
-    condition: worse(worse(dryCond, primaryCondNow), precipCondNow), // combined headline
+    aqiNow: aqiNow == null ? null : Math.round(aqiNow),
+    condition: headline,
     recentRainIn: round2(recentRainIn),
     sun,
-    timeline: buildTimeline(
-      times,
-      precip,
-      nowMs,
-      wetness,
-      dryRate,
-      timelineHours,
-      temp,
-      feels,
-      codes,
-      precipProb,
-      rh,
-      precipTolerance,
-      basis,
-      ideal,
-      dryCutoffs,
-      tempThresholds
-    ),
+    timeline: buildTimeline({
+      times, precip, nowMs, startWetness: wetness, dryRate, maxHours: timelineHours,
+      temp, feels, codes, precipProb, rh, aqi,
+      precipTolerance, aqiLimit, basis, enabled,
+      ideal, dryCutoffs, tempThresholds,
+    }),
   };
 }
 

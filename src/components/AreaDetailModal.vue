@@ -1,8 +1,8 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import ConditionSummary from "./ConditionSummary.vue";
 import { summarize } from "../lib/summary.js";
-import { wmo } from "../lib/weather.js";
+import { wmo, aqiCategory, aqiColor } from "../lib/weather.js";
 import { whenLabel, clock, timeLeftLabel } from "../lib/format.js";
 
 const props = defineProps({
@@ -11,12 +11,64 @@ const props = defineProps({
   current: { type: Object, default: null },
   error: { type: String, default: "" },
   maxWindows: { type: Number, default: 3 },
+  // Operating hours for this area, {open:"10:00", close:"18:00"}, or null for
+  // "use daylight".
+  hours: { type: Object, default: null },
   tempLabels: {
     type: Object,
     default: () => ({ green: "ideal", yellow: "tolerable", orange: "uncomfortable", red: "no" }),
   },
 });
-const emit = defineEmits(["close"]);
+const emit = defineEmits(["close", "set-hours"]);
+
+// "HH:MM" → decimal hours, for the engine's day-span maths.
+function hhmmToHours(s) {
+  if (!s) return null;
+  const [h, m] = s.split(":").map(Number);
+  return Number.isFinite(h) ? h + (m || 0) / 60 : null;
+}
+// Editable copies of the area's hours; empty strings mean "use daylight".
+const openTime = ref(props.hours?.open || "");
+const closeTime = ref(props.hours?.close || "");
+watch(
+  () => props.hours,
+  (h) => {
+    openTime.value = h?.open || "";
+    closeTime.value = h?.close || "";
+  }
+);
+const usingHours = computed(() => !!(openTime.value && closeTime.value));
+function onHoursChange() {
+  // Only meaningful once both ends are set and the window is non-empty.
+  if (openTime.value && closeTime.value && closeTime.value > openTime.value) {
+    emit("set-hours", { open: openTime.value, close: closeTime.value });
+  } else if (!openTime.value && !closeTime.value) {
+    emit("set-hours", null);
+  }
+}
+function clearHours() {
+  openTime.value = "";
+  closeTime.value = "";
+  emit("set-hours", null);
+}
+// Step a time by ±minutes, clamped to the day. Empty fields seed from sensible
+// defaults (9am open / 5pm close) so the arrows work from a blank state.
+function nudge(which, mins) {
+  const cur = which === "open" ? openTime.value : closeTime.value;
+  const base = cur || (which === "open" ? "09:00" : "17:00");
+  let total = hhmmToHours(base) * 60 + mins;
+  total = Math.max(0, Math.min(23 * 60 + 30, total));
+  const hh = String(Math.floor(total / 60)).padStart(2, "0");
+  const mm = String(total % 60).padStart(2, "0");
+  if (which === "open") openTime.value = `${hh}:${mm}`;
+  else closeTime.value = `${hh}:${mm}`;
+  onHoursChange();
+}
+const hoursLabel = computed(() =>
+  usingHours.value
+    ? `${clock(`2000-01-01T${openTime.value}`)}–${clock(`2000-01-01T${closeTime.value}`)}`
+    : "sunrise to sunset"
+);
 
 // Trail dryness as drying time (continuous gradient), matching the cards.
 const isDry = computed(() => !props.result || props.result.hoursUntilDry <= 0);
@@ -31,7 +83,12 @@ const dryByText = computed(() =>
 );
 
 const summary = computed(() =>
-  props.result ? summarize(props.result, new Date(), props.maxWindows) : null
+  props.result
+    ? summarize(props.result, new Date(), props.maxWindows, {
+        open: hhmmToHours(openTime.value),
+        close: hhmmToHours(closeTime.value),
+      })
+    : null
 );
 const tempColor = computed(() =>
   props.result && props.result.tempCondition ? props.result.tempCondition.color : "var(--line)"
@@ -44,6 +101,7 @@ const cur = computed(() => {
     temp: temp != null ? Math.round(temp) : null,
     feels: c?.apparent_temperature != null ? Math.round(c.apparent_temperature) : null,
     humidity: c?.relative_humidity_2m != null ? Math.round(c.relative_humidity_2m) : null,
+    aqi: props.result ? props.result.aqiNow : null,
   };
 });
 
@@ -238,6 +296,7 @@ const showRH = ref(true);
             <div class="metrics">
               <span v-if="cur.feels != null">Feels like {{ cur.feels }}°</span>
               <span v-if="cur.humidity != null">💧 {{ cur.humidity }}% RH</span>
+              <span v-if="cur.aqi != null">AQI <b :style="{ color: aqiColor(cur.aqi) }">{{ cur.aqi }}</b> {{ aqiCategory(cur.aqi) }}</span>
             </div>
           </div>
           <ConditionSummary :summary="summary" :result="result" :show="['temp']" :temp-labels="tempLabels" />
@@ -260,7 +319,7 @@ const showRH = ref(true);
         <!-- Ride outlook (whole days, sunrise→sunset) -->
         <div class="windows">
           <div class="w-head">
-            <div class="w-label">🚵 Ride outlook<span class="w-sun"> (sunrise to sunset)</span></div>
+            <div class="w-label">🚵 Ride outlook<span class="w-sun"> ({{ hoursLabel }})</span></div>
             <div v-if="hasAnyFeels" class="w-legend">
               <button class="leg" :class="{ off: !showActual }" @click="showActual = !showActual">
                 <span class="leg-line solid"></span>Actual
@@ -269,6 +328,35 @@ const showRH = ref(true);
                 <span class="leg-line dashed"></span>(Feels like)
               </button>
               <button class="leg" :class="{ off: !showRH }" @click="showRH = !showRH">RH%</button>
+            </div>
+          </div>
+
+          <!-- Operating hours: overrides daylight for this area (lift hours,
+               gate hours). Blank both to fall back to sunrise→sunset. -->
+          <div class="w-hours">
+            <div class="wh-head">
+              <span class="wh-title">🕘 Open hours</span>
+              <span class="wh-state">{{ usingHours ? hoursLabel : "Daylight (sunrise–sunset)" }}</span>
+              <button v-if="usingHours" class="wh-clear" @click="clearHours">Reset to daylight</button>
+            </div>
+            <div class="wh-row">
+              <span class="wh-cap">Opens</span>
+              <span class="wh-stepper">
+                <input type="time" class="wh-input" v-model="openTime" aria-label="Opening time" @change="onHoursChange" />
+                <span class="wh-arrows">
+                  <button title="Later" @click="nudge('open', 30)">▲</button>
+                  <button title="Earlier" @click="nudge('open', -30)">▼</button>
+                </span>
+              </span>
+              <span class="wh-cap">Closes</span>
+              <span class="wh-stepper">
+                <input type="time" class="wh-input" v-model="closeTime" aria-label="Closing time" @change="onHoursChange" />
+                <span class="wh-arrows">
+                  <button title="Later" @click="nudge('close', 30)">▲</button>
+                  <button title="Earlier" @click="nudge('close', -30)">▼</button>
+                </span>
+              </span>
+              <span v-if="!usingHours" class="wh-note">Set both to override sunrise/sunset for this spot</span>
             </div>
           </div>
           <ul v-if="dayOutlooks.length" class="w-list">
@@ -401,6 +489,40 @@ const showRH = ref(true);
 .w-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .w-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); font-weight: 650; }
 .w-sun { text-transform: none; letter-spacing: 0; font-weight: 500; opacity: 0.85; }
+/* Operating hours: its own card so it reads as a real per-area setting. */
+.w-hours {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 2px 0 10px; padding: 10px 12px;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 10px;
+}
+.wh-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wh-title {
+  text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px;
+  color: var(--text); font-weight: 700;
+}
+.wh-state { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.wh-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wh-cap { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.wh-stepper { display: inline-flex; align-items: stretch; gap: 4px; }
+.wh-input {
+  padding: 4px 7px; font-size: 12.5px; color-scheme: dark;
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--line); border-radius: 7px; font-variant-numeric: tabular-nums;
+}
+.wh-arrows { display: inline-flex; flex-direction: column; gap: 2px; }
+.wh-arrows button {
+  padding: 0 5px; font-size: 7px; line-height: 1.5; cursor: pointer;
+  background: var(--card); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px;
+}
+.wh-arrows button:hover { color: var(--text); border-color: var(--accent); }
+.wh-clear {
+  margin-left: auto; padding: 3px 9px; font-size: 11px; cursor: pointer;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 7px;
+}
+.wh-clear:hover { color: var(--text); border-color: var(--accent); }
+.wh-note { font-size: 11px; color: var(--muted); }
 .w-legend { display: flex; gap: 6px; }
 .leg {
   display: inline-flex; align-items: center; gap: 6px;

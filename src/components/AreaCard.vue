@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { timeLeftLabel } from "../lib/format.js";
+import { aqiColor } from "../lib/weather.js";
 
 const props = defineProps({
   area: { type: Object, required: true },
@@ -40,6 +41,8 @@ const rh = computed(() => {
   const h = props.current?.relative_humidity_2m;
   return h != null ? Math.round(h) : null;
 });
+// Current US AQI, tinted by its EPA category (higher = worse air).
+const aqi = computed(() => (props.result ? props.result.aqiNow : null));
 </script>
 
 <template>
@@ -56,6 +59,7 @@ const rh = computed(() => {
         <span class="q-field">Temp: <b :style="{ color: tempColor }">{{ curTemp != null ? curTemp + "°" : "—" }}</b></span>
         <span class="q-field">Feels like: <b :style="{ color: tempColor }">{{ feels != null ? feels + "°" : "—" }}</b></span>
         <span class="q-field">RH: <b>{{ rh != null ? rh + "%" : "—" }}</b></span>
+        <span v-if="aqi != null" class="q-field">AQI: <b :style="{ color: aqiColor(aqi) }">{{ aqi }}</b></span>
         <span class="q-field">Trails: <b :style="{ color: wetColor }">{{ wetText }}</b></span>
       </div>
     </div>

@@ -30,7 +30,7 @@ function hourOf(iso) {
  *   days: Array<{date, tier, hi, lo, rainIn, reason}>
  * }}
  */
-export function summarize(result, now, maxWindows = 3) {
+export function summarize(result, now, maxWindows = 3, hours = null) {
   const cells = result.timeline || [];
   const nowIso = new Date(now).toISOString();
 
@@ -52,7 +52,7 @@ export function summarize(result, now, maxWindows = 3) {
     next: nextChange(series),
     nextRain: nextRain(cells),
     rideWindows: rideWindows(cells, result.sun, maxWindows),
-    dayOutlooks: dayOutlooks(cells, result.sun, maxWindows),
+    dayOutlooks: dayOutlooks(cells, result.sun, maxWindows, hours),
     days: dailyOutlook(cells),
   };
 }
@@ -145,8 +145,12 @@ function rideWindows(cells, sun, maxWindows = 3) {
 // green stretches within the day as "optimal" ride windows (each with why it
 // ends). Unlike rideWindows (which lists only rideable stretches), this always
 // returns the full day so the chart can show the whole arc.
-function dayOutlooks(cells, sun, maxDays = 3) {
+// `hours` optionally overrides daylight with the location's operating hours
+// ({open, close} as decimal hours) — a bike park on lift hours, or a gated park
+// that opens before sunrise.
+function dayOutlooks(cells, sun, maxDays = 3, hours = null) {
   const sunMap = sun || synthSun(cells);
+  const custom = hours && hours.open != null && hours.close != null && hours.close > hours.open;
   const out = [];
   for (const day of Object.keys(sunMap).sort()) {
     if (out.length >= maxDays) break;
@@ -154,12 +158,15 @@ function dayOutlooks(cells, sun, maxDays = 3) {
     if (!s || !s.sunrise || !s.sunset) continue;
     const srH = timeOfDay(s.sunrise);
     const ssH = timeOfDay(s.sunset);
+    // The charted span: operating hours when set, otherwise sunrise→sunset.
+    const startH = custom ? hours.open : Math.floor(srH);
+    const endH = custom ? hours.close : Math.floor(ssH);
 
     const dayIdx = [];
     for (let i = 0; i < cells.length; i++) {
       if (dateKey(cells[i].time) !== day) continue;
       const h = timeOfDay(cells[i].time);
-      if (h >= Math.floor(srH) && h <= Math.floor(ssH)) dayIdx.push(i);
+      if (h >= Math.floor(startH) && h <= Math.floor(endH)) dayIdx.push(i);
     }
     if (!dayIdx.length) continue;
 
@@ -194,8 +201,9 @@ function dayOutlooks(cells, sun, maxDays = 3) {
       const at = cells[dayIdx[p]].time;
       let endIso, reason;
       if (q === dayIdx.length - 1) {
-        endIso = s.sunset;
-        reason = "sunset";
+        // Ran to the end of the span: closing time when on operating hours.
+        endIso = custom ? hourToIso(day, hours.close) : s.sunset;
+        reason = custom ? "close" : "sunset";
       } else {
         const bIdx = dayIdx[q + 1];
         endIso = cells[bIdx].time;
@@ -210,14 +218,20 @@ function dayOutlooks(cells, sun, maxDays = 3) {
     if (!windows.length) {
       if (dayIdx.some((ci) => cells[ci].tempBad)) noWindowReasons.push("temperature");
       if (dayIdx.some((ci) => cells[ci].precipBad)) noWindowReasons.push("precip chance");
-      if (dayIdx.some((ci) => cells[ci].dry && cells[ci].dry.key !== "green")) {
-        noWindowReasons.push("trail conditions");
-      }
+      if (dayIdx.some((ci) => cells[ci].aqiBad)) noWindowReasons.push("air quality");
+      if (dayIdx.some((ci) => cells[ci].dryBad)) noWindowReasons.push("trail conditions");
     }
 
     out.push({ date: day, sunrise: s.sunrise, sunset: s.sunset, bars, windows, noWindowReasons });
   }
   return out;
+}
+
+// Decimal hour → a local-naive ISO stamp on the given date ("2026-07-22T18:00").
+function hourToIso(day, h) {
+  const hh = String(Math.floor(h)).padStart(2, "0");
+  const mm = String(Math.round((h - Math.floor(h)) * 60)).padStart(2, "0");
+  return `${day}T${hh}:${mm}`;
 }
 
 // Hour-of-day as a decimal (e.g. "…T05:54" → 5.9), read straight from the
