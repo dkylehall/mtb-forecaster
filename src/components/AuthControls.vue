@@ -1,31 +1,28 @@
 <script setup>
 // Sign-in control for cross-device sync. Renders NOTHING until Supabase is
-// configured (isSyncConfigured()), so today it's invisible and the header looks
-// exactly as it did. Once env vars are set, it shows a "Sync" button that opens
-// a magic-link email form, or the signed-in email with a sign-out.
+// configured (isSyncConfigured()), so while inert the header looks exactly as it
+// did. Once env vars are set it shows a "Sync" button offering Google sign-in,
+// or the signed-in email with a sign-out.
 import { ref } from "vue";
-import { isSyncConfigured, signIn, signOut } from "../lib/auth.js";
+import { isSyncConfigured, signInWithGoogle, signOut } from "../lib/auth.js";
 
 // Parent passes the current session's email (or null). Kept a prop so App.vue
 // stays the single owner of auth state via initAuth's onChange hook.
-const props = defineProps({
+defineProps({
   email: { type: String, default: null },
 });
 
 const configured = isSyncConfigured();
 const open = ref(false);
-const address = ref("");
-const status = ref(null); // null | "sending" | "sent" | error string
+const error = ref("");
 
-async function submit() {
-  const value = address.value.trim();
-  if (!value) return;
-  status.value = "sending";
+async function google() {
+  error.value = "";
   try {
-    await signIn(value);
-    status.value = "sent";
+    // Redirects the page to Google; nothing after this runs on success.
+    await signInWithGoogle();
   } catch (e) {
-    status.value = e.message || "Couldn't send the sign-in link";
+    error.value = e.message || "Couldn't start Google sign-in";
   }
 }
 </script>
@@ -41,22 +38,9 @@ async function submit() {
       <button class="refresh" title="Sync across devices" @click="open = !open">⇄ Sync</button>
 
       <div v-if="open" class="pop" @click.stop>
-        <p v-if="status === 'sent'" class="ok">Check your email for a sign-in link.</p>
-        <template v-else>
-          <label>Sync your areas and settings across devices.</label>
-          <div class="row">
-            <input
-              type="email"
-              placeholder="you@example.com"
-              v-model="address"
-              @keydown.enter="submit"
-            />
-            <button class="link" :disabled="status === 'sending'" @click="submit">
-              {{ status === "sending" ? "Sending…" : "Send link" }}
-            </button>
-          </div>
-          <p v-if="status && status !== 'sending'" class="err">{{ status }}</p>
-        </template>
+        <label>Sync your areas and settings across devices.</label>
+        <button class="google" @click="google">Continue with Google</button>
+        <p v-if="error" class="err">{{ error }}</p>
       </div>
     </template>
   </div>
@@ -107,22 +91,19 @@ async function submit() {
   opacity: 0.8;
   margin-bottom: 8px;
 }
-.pop .row {
-  display: flex;
-  gap: 6px;
-}
-.pop input {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 8px;
+.google {
+  width: 100%;
+  padding: 8px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(0, 0, 0, 0.2);
-  color: inherit;
-}
-.ok {
+  background: #fff;
+  color: #1f1f1f;
   font-size: 0.85rem;
-  margin: 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+.google:hover {
+  background: #f2f2f2;
 }
 .err {
   font-size: 0.8rem;

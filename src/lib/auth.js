@@ -11,7 +11,10 @@
 //      is expected for the anon key; RLS is what protects the data):
 //        VITE_SUPABASE_URL=https://<project>.supabase.co
 //        VITE_SUPABASE_ANON_KEY=<anon public key>
-//   3. That's it — AuthControls.vue's Sync button appears and calls signIn().
+//   3. Enable the Google provider in Supabase (Authentication → Providers) and
+//      allowlist this app's URLs under Authentication → URL Configuration.
+//   4. That's it — AuthControls.vue's Sync button appears and calls
+//      signInWithGoogle(). Google is the only sign-in method.
 //
 // @supabase/supabase-js is installed but imported dynamically and only when
 // configured, so Vite code-splits it into its own chunk. While inert that chunk
@@ -75,10 +78,19 @@ export async function initAuth({ onSignedIn, onChange } = {}) {
   });
 }
 
-/** Send a magic-link sign-in email. No passwords for us to store or leak. */
-export async function signIn(email) {
+/**
+ * OAuth sign-in with Google. Redirects the whole page to Google, then back here
+ * via Supabase's callback with the session in the URL (detectSessionInUrl, on by
+ * default, picks it up and fires onAuthStateChange). redirectTo is the current
+ * page so localhost and the deployed subpath each return to themselves — both
+ * must be in the Supabase Auth redirect allowlist.
+ */
+export async function signInWithGoogle() {
   const sb = await getClient();
-  const { error } = await sb.auth.signInWithOtp({ email });
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: window.location.origin + window.location.pathname },
+  });
   if (error) throw new Error(error.message);
 }
 
