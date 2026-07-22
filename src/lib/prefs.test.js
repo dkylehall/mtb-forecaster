@@ -61,6 +61,7 @@ describe("snapshotPrefs / applyPrefs", () => {
       "mtb_aqi_limit",
       "mtb_params_enabled",
       "mtb_area_hours",
+      "mtb_area_wet",
       "mtb_basis",
       "mtb_sort",
     ]);

@@ -21,6 +21,7 @@ const AQI_KEY = "mtb_aqi_limit";
 const BASIS_KEY = "mtb_basis";
 const ENABLED_KEY = "mtb_params_enabled";
 const AREA_HOURS_KEY = "mtb_area_hours";
+const AREA_WET_KEY = "mtb_area_wet";
 const SETTINGS_KEY = "mtb_settings_v1";
 
 const areas = ref([]);
@@ -225,6 +226,11 @@ function tempVarOf(r) {
   if (!r || r.tempNow == null) return Infinity;
   return Math.max(0, r.tempNow - ideal.max, ideal.min - r.tempNow);
 }
+// Does trail dryness count for this area? Off globally, or bypassed because the
+// area rides fine wet, means a wet trail shouldn't drag its ranking down.
+function dryCounts(area) {
+  return enabledParams.dry && !areaWet[area.id];
+}
 
 const displayedAreas = computed(() => {
   const list = areas.value;
@@ -235,12 +241,20 @@ const displayedAreas = computed(() => {
     return [...list].sort((a, b) => {
       const ra = conditions[a.id] && conditions[a.id].result;
       const rb = conditions[b.id] && conditions[b.id].result;
+      // Rank on the combined condition first: it already folds in every enabled
+      // parameter — temperature, precip chance, AQI, dryness — including the
+      // per-area "rides wet" bypass. Ranking on temperature alone (as this used
+      // to) meant those parameters never moved anything.
+      const sa = ra && ra.condition ? ra.condition.severity : Infinity;
+      const sb = rb && rb.condition ? rb.condition.severity : Infinity;
+      if (sa !== sb) return sa - sb;
       const ta = tempVarOf(ra);
       const tb = tempVarOf(rb);
-      if (ta !== tb) return ta - tb; // closer to ideal temp first
-      const ha = ra ? ra.hoursUntilDry : Infinity;
-      const hb = rb ? rb.hoursUntilDry : Infinity;
-      return ha - hb; // then drier first
+      if (ta !== tb) return ta - tb; // then closer to the ideal temp
+      // Then drier first — but only where dryness actually counts for that area.
+      const ha = dryCounts(a) && ra ? ra.hoursUntilDry : 0;
+      const hb = dryCounts(b) && rb ? rb.hoursUntilDry : 0;
+      return ha - hb;
     });
   }
   if (sortBy.value === "nearest") {
@@ -354,16 +368,41 @@ function setAreaHours(id, hours) {
   else delete areaHours[id];
   writePref(AREA_HOURS_KEY, JSON.stringify({ ...areaHours }));
 }
-// Drop hours whose area is gone — e.g. deleted on another device, then pulled
-// down here. Guarded on a non-empty list so a not-yet-loaded board can't wipe
-// entries wholesale.
+// Areas that ride fine wet (rock, sand, hardpack). Trail dryness is skipped for
+// these, but only for that area — the global parameter stays as it is.
+const areaWet = reactive(loadAreaWet());
+function loadAreaWet() {
+  try {
+    const v = JSON.parse(localStorage.getItem(AREA_WET_KEY));
+    if (v && typeof v === "object" && !Array.isArray(v)) return v;
+  } catch {
+    /* fall through */
+  }
+  return {};
+}
+function setAreaWet(id, on) {
+  if (on) areaWet[id] = true;
+  else delete areaWet[id];
+  writePref(AREA_WET_KEY, JSON.stringify({ ...areaWet }));
+  recomputeAll();
+}
+
+// Drop per-area entries whose area is gone — e.g. deleted on another device,
+// then pulled down here. Guarded on a non-empty list so a not-yet-loaded board
+// can't wipe entries wholesale.
 function pruneAreaHours() {
   if (!areas.value.length) return;
   const live = new Set(areas.value.map((a) => a.id));
-  const stale = Object.keys(areaHours).filter((id) => !live.has(id));
-  if (!stale.length) return;
-  for (const id of stale) delete areaHours[id];
-  writePref(AREA_HOURS_KEY, JSON.stringify({ ...areaHours }));
+  const staleHours = Object.keys(areaHours).filter((id) => !live.has(id));
+  if (staleHours.length) {
+    for (const id of staleHours) delete areaHours[id];
+    writePref(AREA_HOURS_KEY, JSON.stringify({ ...areaHours }));
+  }
+  const staleWet = Object.keys(areaWet).filter((id) => !live.has(id));
+  if (staleWet.length) {
+    for (const id of staleWet) delete areaWet[id];
+    writePref(AREA_WET_KEY, JSON.stringify({ ...areaWet }));
+  }
 }
 
 // Collapsed/expanded state of the parameters card. Device-local UI state, so
@@ -436,7 +475,8 @@ function recompute(area) {
     precipTolerance: precipTol.value,
     aqiLimit: aqiLimit.value,
     basis: predictionBasis.value,
-    enabled: { ...enabledParams },
+    // "Rideable when wet" drops dryness for this area only.
+    enabled: { ...enabledParams, dry: enabledParams.dry && !areaWet[area.id] },
     tempThresholds: tempThresholds(),
     daily: c.wx.daily,
   });
@@ -513,6 +553,7 @@ function onRemove(id) {
   // Drop this area's operating hours too. Area ids are derived from lat/lon, so
   // leaving them would silently resurrect old hours if the same spot is re-added.
   setAreaHours(id, null);
+  setAreaWet(id, false);
   persist();
 }
 
@@ -528,6 +569,8 @@ function hydratePrefsFromLocal() {
   Object.assign(enabledParams, loadEnabled());
   for (const k of Object.keys(areaHours)) delete areaHours[k];
   Object.assign(areaHours, loadAreaHours());
+  for (const k of Object.keys(areaWet)) delete areaWet[k];
+  Object.assign(areaWet, loadAreaWet());
   predictionBasis.value = localStorage.getItem(BASIS_KEY) === "feels" ? "feels" : "temp";
   const s = localStorage.getItem(SORT_KEY);
   if (VALID_SORTS.includes(s)) sortBy.value = s;
@@ -730,6 +773,7 @@ onUnmounted(() => {
             :result="conditions[area.id] ? conditions[area.id].result : null"
             :current="conditions[area.id] && conditions[area.id].wx ? conditions[area.id].wx.current : null"
             :error="conditions[area.id] ? conditions[area.id].error : ''"
+            :wet-ok="!!areaWet[area.id]"
             @remove="onRemove"
             @open="openDetail"
           />
@@ -779,7 +823,9 @@ onUnmounted(() => {
       :max-windows="settings.maxWindows"
       :temp-labels="tempLabels"
       :hours="areaHours[detailArea.id] || null"
+      :wet-ok="!!areaWet[detailArea.id]"
       @set-hours="setAreaHours(detailArea.id, $event)"
+      @set-wet="setAreaWet(detailArea.id, $event)"
       @close="detailId = null"
     />
   </div>

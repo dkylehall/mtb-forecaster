@@ -14,12 +14,14 @@ const props = defineProps({
   // Operating hours for this area, {open:"10:00", close:"18:00"}, or null for
   // "use daylight".
   hours: { type: Object, default: null },
+  // This area rides fine wet — skip trail dryness for it.
+  wetOk: { type: Boolean, default: false },
   tempLabels: {
     type: Object,
     default: () => ({ green: "ideal", yellow: "tolerable", orange: "uncomfortable", red: "no" }),
   },
 });
-const emit = defineEmits(["close", "set-hours"]);
+const emit = defineEmits(["close", "set-hours", "set-wet"]);
 
 // "HH:MM" → decimal hours, for the engine's day-span maths.
 function hhmmToHours(s) {
@@ -30,21 +32,32 @@ function hhmmToHours(s) {
 // Editable copies of the area's hours; empty strings mean "use daylight".
 const openTime = ref(props.hours?.open || "");
 const closeTime = ref(props.hours?.close || "");
+// Re-seed only when a different area is opened. Watching `hours` instead would
+// clobber a half-finished edit: clearing one end saves null, which would bounce
+// back and blank the other field too.
 watch(
-  () => props.hours,
-  (h) => {
-    openTime.value = h?.open || "";
-    closeTime.value = h?.close || "";
+  () => props.area?.id,
+  () => {
+    openTime.value = props.hours?.open || "";
+    closeTime.value = props.hours?.close || "";
   }
 );
 const usingHours = computed(() => !!(openTime.value && closeTime.value));
 function onHoursChange() {
-  // Only meaningful once both ends are set and the window is non-empty.
+  // Only a complete, non-empty window counts. Anything else (one side cleared,
+  // or close before open) falls back to daylight — and clears what was stored,
+  // so a half-edited state can't resurrect the old hours on reopen.
   if (openTime.value && closeTime.value && closeTime.value > openTime.value) {
     emit("set-hours", { open: openTime.value, close: closeTime.value });
-  } else if (!openTime.value && !closeTime.value) {
+  } else {
     emit("set-hours", null);
   }
+}
+// Clear just one end (the × beside each field).
+function clearOne(which) {
+  if (which === "open") openTime.value = "";
+  else closeTime.value = "";
+  onHoursChange();
 }
 function clearHours() {
   openTime.value = "";
@@ -336,6 +349,7 @@ const showRH = ref(true);
           <div class="w-hours">
             <div class="wh-head">
               <span class="wh-title">🕘 Open hours</span>
+
               <span class="wh-state">{{ usingHours ? hoursLabel : "Daylight (sunrise–sunset)" }}</span>
               <button v-if="usingHours" class="wh-clear" @click="clearHours">Reset to daylight</button>
             </div>
@@ -347,6 +361,7 @@ const showRH = ref(true);
                   <button title="Later" @click="nudge('open', 30)">▲</button>
                   <button title="Earlier" @click="nudge('open', -30)">▼</button>
                 </span>
+                <button v-if="openTime" class="wh-x" title="Clear opening time" @click="clearOne('open')">×</button>
               </span>
               <span class="wh-cap">Closes</span>
               <span class="wh-stepper">
@@ -355,9 +370,20 @@ const showRH = ref(true);
                   <button title="Later" @click="nudge('close', 30)">▲</button>
                   <button title="Earlier" @click="nudge('close', -30)">▼</button>
                 </span>
+                <button v-if="closeTime" class="wh-x" title="Clear closing time" @click="clearOne('close')">×</button>
               </span>
               <span v-if="!usingHours" class="wh-note">Set both to override sunrise/sunset for this spot</span>
             </div>
+
+            <label class="wh-wet">
+              <input
+                type="checkbox"
+                :checked="wetOk"
+                @change="emit('set-wet', $event.target.checked)"
+              />
+              <span class="wh-wet-name">Rideable when wet</span>
+              <span class="wh-note">Rock, sand or hardpack — ignore trail dryness here</span>
+            </label>
           </div>
           <ul v-if="dayOutlooks.length" class="w-list">
             <li v-for="(d, i) in dayOutlooks" :key="i" class="w-item">
@@ -516,6 +542,12 @@ const showRH = ref(true);
   border: 1px solid var(--line); border-radius: 4px;
 }
 .wh-arrows button:hover { color: var(--text); border-color: var(--accent); }
+.wh-x {
+  padding: 0 6px; font-size: 14px; line-height: 1; cursor: pointer;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.wh-x:hover { color: var(--red); border-color: var(--red); }
 .wh-clear {
   margin-left: auto; padding: 3px 9px; font-size: 11px; cursor: pointer;
   background: transparent; color: var(--muted);
@@ -523,6 +555,17 @@ const showRH = ref(true);
 }
 .wh-clear:hover { color: var(--text); border-color: var(--accent); }
 .wh-note { font-size: 11px; color: var(--muted); }
+.wh-wet {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; cursor: pointer;
+  padding-top: 8px; border-top: 1px solid var(--line);
+}
+.wh-wet input[type="checkbox"] {
+  width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex: 0 0 auto;
+}
+.wh-wet-name {
+  text-transform: uppercase; letter-spacing: 0.6px; font-size: 10.5px;
+  color: var(--text); font-weight: 700;
+}
 .w-legend { display: flex; gap: 6px; }
 .leg {
   display: inline-flex; align-items: center; gap: 6px;

@@ -19,6 +19,7 @@ export const PREF_KEYS = [
   "mtb_aqi_limit", // air-quality ceiling (US AQI)
   "mtb_params_enabled", // which scoring parameters are switched on
   "mtb_area_hours", // per-area operating hours {areaId: {open, close}}
+  "mtb_area_wet", // per-area "rideable when wet" flags {areaId: true}
   "mtb_basis", // temp vs. feels-like
   "mtb_sort", // list sort order
 ];

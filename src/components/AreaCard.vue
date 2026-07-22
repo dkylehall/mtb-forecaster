@@ -8,6 +8,8 @@ const props = defineProps({
   result: { type: Object, default: null }, // computeConditions() output, or null while loading
   current: { type: Object, default: null }, // raw Open-Meteo `current` block
   error: { type: String, default: "" },
+  // Area rides fine wet — dryness is excluded from its scoring.
+  wetOk: { type: Boolean, default: false },
 });
 const emit = defineEmits(["remove", "open"]);
 
@@ -60,7 +62,11 @@ const aqi = computed(() => (props.result ? props.result.aqiNow : null));
         <span class="q-field">Feels like: <b :style="{ color: tempColor }">{{ feels != null ? feels + "°" : "—" }}</b></span>
         <span class="q-field">RH: <b>{{ rh != null ? rh + "%" : "—" }}</b></span>
         <span v-if="aqi != null" class="q-field">AQI: <b :style="{ color: aqiColor(aqi) }">{{ aqi }}</b></span>
-        <span class="q-field">Trails: <b :style="{ color: wetColor }">{{ wetText }}</b></span>
+        <span class="q-field">Trails: <b :style="{ color: wetColor }">{{ wetText }}</b><span
+          v-if="wetOk"
+          class="q-wetok"
+          title="Rideable when wet — trail dryness is ignored for this area"
+        >rides wet</span></span>
       </div>
     </div>
     <div v-else-if="error" class="quick muted">retrying…</div>
@@ -99,6 +105,11 @@ const aqi = computed(() => (props.result ? props.result.aqiNow : null));
 .q-params { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 3px 12px; }
 .q-field { white-space: nowrap; }
 .q-field b { font-weight: 700; color: var(--text); }
+.q-wetok {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 650; letter-spacing: 0.3px;
+  color: var(--accent); border: 1px solid var(--line); background: var(--card-2);
+}
 .quick.muted { font-size: 12px; }
 
 .remove {
