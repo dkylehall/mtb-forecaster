@@ -640,7 +640,10 @@ onUnmounted(() => {
       <button class="s-head" :aria-expanded="paramsOpen" @click="toggleParams">
         <span class="s-chevron">{{ paramsOpen ? "▾" : "▸" }}</span>
         Forecast parameters
-        <span v-if="!paramsOpen" class="s-summary">{{ activeParamCount }} of 4 on</span>
+        <span class="s-right">
+          <span v-if="!paramsOpen" class="s-summary">{{ activeParamCount }} of 4 on</span>
+          <span class="s-toggle">{{ paramsOpen ? "Collapse" : "Expand" }}</span>
+        </span>
       </button>
 
       <div v-show="paramsOpen" class="s-body">
@@ -863,10 +866,15 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
 }
 .s-head:hover { color: var(--text); }
 .s-chevron { font-size: 9px; line-height: 1; }
-.s-summary {
-  margin-left: auto; text-transform: none; letter-spacing: 0;
-  font-size: 11px; font-weight: 500;
+.s-right { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
+.s-summary { text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 500; }
+/* Visible affordance for the collapse toggle — the whole header is clickable,
+   but the chevron alone didn't read as one. */
+.s-toggle {
+  text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 500;
+  color: var(--accent); text-decoration: underline;
 }
+.s-head:hover .s-toggle { color: var(--text); }
 .s-body { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 /* One row per scoring parameter: [checkbox + name] [ⓘ] [control] */
 .setting {
