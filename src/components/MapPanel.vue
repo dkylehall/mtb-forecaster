@@ -114,7 +114,12 @@ function renderMarkers() {
       fillColor: color,
       fillOpacity: 0.95,
     });
-    m.bindTooltip(area.name, { direction: "top", offset: [0, -6] });
+    // Leaflet assigns string tooltip content via innerHTML, and area names come
+    // from OSM search results — world-editable, so treat them as untrusted. An
+    // element with textContent is appended as-is, no HTML parsing.
+    const label = document.createElement("span");
+    label.textContent = area.name;
+    m.bindTooltip(label, { direction: "top", offset: [0, -6] });
     m.on("click", () => emit("select", area.id)); // jump to card
     m.addTo(markerLayer);
     pts.push([area.lat, area.lon]);
