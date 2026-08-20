@@ -30,7 +30,7 @@ function hourOf(iso) {
  *   days: Array<{date, tier, hi, lo, rainIn, reason}>
  * }}
  */
-export function summarize(result, now, maxWindows = 3, hours = null) {
+export function summarize(result, now, maxWindows = 3, hours = null, range = null) {
   const cells = result.timeline || [];
   const nowIso = new Date(now).toISOString();
 
@@ -52,7 +52,7 @@ export function summarize(result, now, maxWindows = 3, hours = null) {
     next: nextChange(series),
     nextRain: nextRain(cells),
     rideWindows: rideWindows(cells, result.sun, maxWindows),
-    dayOutlooks: dayOutlooks(cells, result.sun, maxWindows, hours),
+    dayOutlooks: dayOutlooks(cells, result.sun, maxWindows, hours, range),
     days: dailyOutlook(cells),
   };
 }
@@ -148,12 +148,21 @@ function rideWindows(cells, sun, maxWindows = 3) {
 // `hours` optionally overrides daylight with the location's operating hours
 // ({open, close} as decimal hours) — a bike park on lift hours, or a gated park
 // that opens before sunrise.
-function dayOutlooks(cells, sun, maxDays = 3, hours = null) {
+function dayOutlooks(cells, sun, maxDays = 3, hours = null, range = null) {
   const sunMap = sun || synthSun(cells);
   const custom = hours && hours.open != null && hours.close != null && hours.close > hours.open;
+  // Ride Planner date range: when set, show exactly the days it spans (a single
+  // date sets from===to); otherwise the first `maxDays` days.
+  const hasRange = !!(range && (range.from || range.to));
+  const lo = hasRange ? range.from || range.to : null;
+  const hi = hasRange ? range.to || range.from : null;
   const out = [];
   for (const day of Object.keys(sunMap).sort()) {
-    if (out.length >= maxDays) break;
+    if (hasRange) {
+      if (day < lo || day > hi) continue;
+    } else if (out.length >= maxDays) {
+      break;
+    }
     const s = sunMap[day];
     if (!s || !s.sunrise || !s.sunset) continue;
     const srH = timeOfDay(s.sunrise);

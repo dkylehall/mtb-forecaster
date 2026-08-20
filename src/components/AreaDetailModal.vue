@@ -14,6 +14,9 @@ const props = defineProps({
   // Operating hours for this area, {open:"10:00", close:"18:00"}, or null for
   // "use daylight".
   hours: { type: Object, default: null },
+  // Ride Planner date filter {from, to} as "YYYY-MM-DD", or null for the
+  // default next-N-days outlook.
+  dateRange: { type: Object, default: null },
   // This area rides fine wet — skip trail dryness for it.
   wetOk: { type: Boolean, default: false },
   tempLabels: {
@@ -97,10 +100,13 @@ const dryByText = computed(() =>
 
 const summary = computed(() =>
   props.result
-    ? summarize(props.result, new Date(), props.maxWindows, {
-        open: hhmmToHours(openTime.value),
-        close: hhmmToHours(closeTime.value),
-      })
+    ? summarize(
+        props.result,
+        new Date(),
+        props.maxWindows,
+        { open: hhmmToHours(openTime.value), close: hhmmToHours(closeTime.value) },
+        props.dateRange
+      )
     : null
 );
 const tempColor = computed(() =>

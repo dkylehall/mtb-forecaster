@@ -6,6 +6,7 @@ import MapPanel from "./components/MapPanel.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import TempTiersModal from "./components/TempTiersModal.vue";
 import AreaDetailModal from "./components/AreaDetailModal.vue";
+import RidePlanner from "./components/RidePlanner.vue";
 import AuthControls from "./components/AuthControls.vue";
 import { fetchTrailWeather, fetchAirQuality, aqiCategory, aqiColor } from "./lib/weather.js";
 import { computeConditions } from "./lib/drying.js";
@@ -36,8 +37,26 @@ const showTiers = ref(false); // the "Customize" tier editor
 // Which area's detail modal is open (id, or null).
 const detailId = ref(null);
 const detailArea = computed(() => areas.value.find((a) => a.id === detailId.value) || null);
+// The Ride Planner's date range only filters the outlook when the modal was
+// opened from it — clicking a card shows the normal next-few-days view.
+const openedFromPlanner = ref(false);
 function openDetail(id) {
   detailId.value = id;
+  openedFromPlanner.value = false;
+}
+
+// Ride Planner state: a date range and the dates the weather API covers.
+const planRange = ref({ from: "", to: "" });
+const availRange = computed(() => {
+  for (const id in conditions) {
+    const t = conditions[id]?.wx?.daily?.time;
+    if (t && t.length) return { min: t[0], max: t[t.length - 1] };
+  }
+  return null;
+});
+function onPlan(id) {
+  openDetail(id);
+  openedFromPlanner.value = true;
 }
 
 // Adjustable scoring settings (edited in the Settings modal). Defaults come from
@@ -636,7 +655,8 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <div class="settings">
+    <div class="top6">
+    <div class="settings col-6">
       <button class="s-head" :aria-expanded="paramsOpen" @click="toggleParams">
         <span class="s-chevron">{{ paramsOpen ? "▾" : "▸" }}</span>
         Forecast parameters
@@ -753,6 +773,16 @@ onUnmounted(() => {
       </div>
     </div>
 
+      <RidePlanner
+        class="col-6"
+        :areas="areas"
+        :avail="availRange"
+        :range="planRange"
+        @plan="onPlan"
+        @update-range="planRange = $event"
+      />
+    </div>
+
     <div class="layout">
       <main class="left">
         <div class="board-head">
@@ -824,6 +854,7 @@ onUnmounted(() => {
       :max-windows="settings.maxWindows"
       :temp-labels="tempLabels"
       :hours="areaHours[detailArea.id] || null"
+      :date-range="openedFromPlanner ? planRange : null"
       :wet-ok="!!areaWet[detailArea.id]"
       @set-hours="setAreaHours(detailArea.id, $event)"
       @set-wet="setAreaWet(detailArea.id, $event)"
@@ -851,9 +882,15 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); }
 .controls { display: flex; align-items: center; gap: 8px; }
 .refresh { font-size: 16px; padding: 8px 12px; }
 
+/* Top row: forecast parameters (6) beside the ride planner (6), Bootstrap-style. */
+.top6 {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+  align-items: start; margin-bottom: 16px;
+}
+.top6 > .col-6 { min-width: 0; }
 .settings {
   display: flex; flex-direction: column; gap: 2px;
-  margin-bottom: 16px; padding: 12px 14px;
+  padding: 12px 14px;
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
 }
 .s-head {
@@ -977,8 +1014,10 @@ footer {
 }
 
 @media (max-width: 900px) {
+  /* Stack everything: params, planner, then the map/cards below. */
+  .top6 { grid-template-columns: 1fr; }
   .layout { grid-template-columns: 1fr; }
-  .right { order: -1; } /* map on top when stacked */
+  .right { order: -1; } /* map above the cards when stacked */
   .left { position: static; max-height: none; }
   .board { overflow: visible; padding-right: 0; }
 }
