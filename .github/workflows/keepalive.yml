@@ -1,0 +1,50 @@
+# Keeps the free-tier Supabase project awake.
+#
+# Free Supabase projects pause after ~7 days with no activity. A paused project
+# stops resolving/connecting for a bit while it wakes, which is what broke sync
+# before ("site can't be reached" on sign-in). A small scheduled query both
+# counts as activity (preventing the pause) and, if it ever did pause, wakes it.
+# Runs every 3 days on purpose: GitHub can delay scheduled runs by many minutes,
+# and "exactly 7 days" leaves no margin.
+#
+# Reads the same repo variables the deploy uses (Settings → Secrets and
+# variables → Actions → Variables). If they're unset it no-ops, so a fork
+# without Supabase stays green.
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "17 8 */3 * *" # every 3 days at 08:17 UTC (off the top of the hour)
+  workflow_dispatch: {} # manual "run now" from the Actions tab
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query the database so the project registers activity
+        env:
+          URL: ${{ vars.VITE_SUPABASE_URL }}
+          KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "Supabase variables not set — nothing to keep alive. Skipping."
+            exit 0
+          fi
+          # A real PostgREST GET (returns 0 rows under RLS with the anon key, but
+          # still executes against Postgres — that's what counts as activity). If
+          # the project was paused the first attempt may fail while it wakes, so
+          # retry a few times with a pause between; a later attempt confirms it.
+          for attempt in 1 2 3 4; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 40 \
+              -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+              "$URL/rest/v1/areas?select=id&limit=1" || echo 000)
+            echo "Attempt $attempt: HTTP $code"
+            case "$code" in
+              2*) echo "Project is awake."; exit 0 ;;
+            esac
+            [ "$attempt" -lt 4 ] && sleep 30
+          done
+          echo "::error::Supabase did not return 2xx after retries ($code) — project may be paused, deleted, or the key/URL is wrong."
+          exit 1
